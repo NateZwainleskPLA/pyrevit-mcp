@@ -12,3 +12,4 @@ wheels/
 *TODO.md
 .env
 CLAUDE.md
+.mcp.json
