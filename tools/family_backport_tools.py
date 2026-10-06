@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Agent-oriented family evidence tools; reconstruction uses focused Revit code."""
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from mcp.server.fastmcp import Context
 from revit_mcp.family_backport_contract import compatibility_report, compare_manifests
 
@@ -9,7 +9,7 @@ from revit_mcp.family_backport_contract import compatibility_report, compare_man
 def register_family_backport_tools(mcp, revit_post):
     @mcp.tool()
     async def inspect_family_backport(target: str, file_path: str, expected_version: int = 2025,
-                                     target_version: int = 2024, template_path: str = None,
+                                     target_version: int = 2024, template_path: Optional[str] = None,
                                      ctx: Context = None) -> str:
         """Inspect one on-disk RFA without saving, upgrading, or changing the UI.
 
