@@ -17,8 +17,9 @@ def register_routes():
     """Register all MCP route modules"""
     try:
         # Import and register status routes
-        from revit_mcp.status import register_status_routes
+        from revit_mcp.status import register_liveness_routes, register_status_routes
 
+        register_liveness_routes(api)
         register_status_routes(api)
 
         from revit_mcp.model_info import register_model_info_routes
