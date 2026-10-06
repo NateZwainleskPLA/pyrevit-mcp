@@ -3,6 +3,7 @@
 import json
 
 from .operation_store import OperationError
+from .execution_output import safe_text
 
 
 def register_execution_routes(api, runtime, make_response=None):
@@ -11,6 +12,12 @@ def register_execution_routes(api, runtime, make_response=None):
         make_response = routes.make_response
 
     def respond(action, request):
+        def response(body, status):
+            adapter = getattr(runtime, "adapter", None)
+            if adapter is not None:
+                snapshot = adapter.registry.snapshot()
+                body.setdefault("actual_target", dict((key, snapshot[key]) for key in ("instance_id", "runtime_id")))
+            return make_response(data=body, status=status)
         try:
             data = request.data
             if not isinstance(data, dict):
@@ -19,20 +26,27 @@ def register_execution_routes(api, runtime, make_response=None):
                 raise ValueError("Object payload required")
             if action == "submit":
                 receipt, created = runtime.submit(data)
-                return make_response(data=receipt, status=202 if created else 200)
-            runtime.validate_cached(data)
+                return response(receipt, 202 if created else 200)
+            adapter = getattr(runtime, "adapter", None)
+            if adapter is not None:
+                adapter.validate_operation_cached(data)
+            else:
+                runtime.validate_cached(data)
             receipt = runtime.store.inspect(data["operation_id"])
             # Inspection cannot read an operation using another target/document.
-            for key in ("target", "document", "identity", "instance_id", "runtime_id", "document_id"):
+            for key in ("target", "identity", "instance_id", "runtime_id"):
                 if receipt.get(key) != data.get(key):
                     raise OperationError("operation_target_mismatch", "Operation target does not match")
+            for key in ("document", "document_id"):
+                if key in data and receipt.get(key) != data[key]:
+                    raise OperationError("operation_target_mismatch", "Supplied historical document does not match")
             if action == "cancel":
                 receipt = runtime.store.cancel(data["operation_id"])
-            return make_response(data=receipt, status=200)
+            return response(receipt, 200)
         except OperationError as error:
-            return make_response(data={"error": str(error), "error_code": error.code}, status=error.status)
+            return response({"error": safe_text(error), "error_code": error.code}, error.status)
         except (ValueError, TypeError, KeyError) as error:
-            return make_response(data={"error": str(error), "error_code": "invalid_request"}, status=400)
+            return response({"error": safe_text(error), "error_code": "invalid_request"}, 400)
 
     @api.route("/operations/submit/", methods=["POST"])
     def submit(request):

@@ -3,6 +3,7 @@
 import threading
 
 from .operation_store import OperationError
+from .execution_output import safe_text, validate_output_limit
 
 
 class ExecutionRuntime(object):
@@ -17,10 +18,11 @@ class ExecutionRuntime(object):
     API-context handlers, not just the old script route.
     """
     def __init__(self, store, validate_cached, validate_api, execute,
-                 experimental=False, exclusive=False, refresh=None):
+                 experimental=False, exclusive=False, refresh=None, admission_guard=None):
         self.store = store
         self.validate_cached, self.validate_api = validate_cached, validate_api
         self.execute, self.refresh = execute, refresh
+        self.admission_guard = admission_guard
         self.enabled = bool(experimental and exclusive)
         self.lock = threading.RLock()
         self.event = None
@@ -38,8 +40,19 @@ class ExecutionRuntime(object):
             self.event = event
 
     def _diagnostic(self, error):
-        self.diagnostics.append(str(error)[:2048])
+        self.diagnostics.append(safe_text(error)[:2048])
         del self.diagnostics[:-16]
+
+    def _quarantine(self, reason, operation_id=None, document_id=None):
+        self.quarantined = True
+        adapter = getattr(self, "adapter", None)
+        if adapter is not None:
+            try:
+                adapter.safety.observe({"unsafe": True, "error_type": "RuntimeQuarantine",
+                    "cleanup_errors": [{"stage": "runtime", "error": safe_text(reason)[:2048]}]},
+                    document_id, operation_id)
+            except BaseException as error:
+                self._diagnostic(error)
 
     def submit(self, payload):
         with self.lock:
@@ -53,6 +66,15 @@ class ExecutionRuntime(object):
             else:
                 if self.quarantined:
                     raise OperationError("host_quarantined", "Host needs targeted recovery", 503)
+                from .identity import string_types
+                if not isinstance(payload.get("code"), string_types) or not payload["code"].strip():
+                    raise OperationError("invalid_code", "Nonempty script code is required", 400)
+                if payload.get("transaction_mode", "script") not in ("script", "managed"):
+                    raise OperationError("invalid_transaction_mode", "Mode must be script or managed", 400)
+                if type(payload.get("allow_ui_change", False)) is not bool:
+                    raise OperationError("invalid_ui_permission", "UI permission must be boolean", 400)
+                if self.admission_guard:
+                    self.admission_guard(payload)
                 receipt, created = self.store.admit(payload)
             self._schedule()
             return receipt, created
@@ -94,45 +116,50 @@ class ExecutionRuntime(object):
                 outcome = self.execute(payload, context,
                                        lambda: self.store.cancellation_requested(operation_id))
             if outcome.get("unsafe") or outcome.get("cleanup_errors"):
-                self.quarantined = True
+                self._quarantine("Unsafe execution/cleanup", operation_id, payload.get("document_id"))
                 outcome["state"], outcome["effects"] = "failed", "unknown"
                 outcome.setdefault("result", {})["cleanup_errors"] = outcome.get("cleanup_errors", [])
             if outcome.get("effects") not in ("none", "committed", "rolled_back", "unknown"):
                 raise ValueError("Executor must report explicit effects")
         except BaseException as error:
-            if entered:
-                self.quarantined = True
+            if entered or getattr(error, "code", None) == "host_unsafe":
+                self._quarantine(error, operation_id, payload.get("document_id"))
             outcome = {"state": "failed", "effects": "unknown" if entered else "none",
-                       "result": {"error": str(error), "error_type": type(error).__name__}}
+                       "result": {"error": safe_text(error), "error_type": type(error).__name__}}
         finally:
             try:
                 self.store.complete(operation_id, outcome["state"], outcome["effects"], outcome["result"])
+                if self.store.durability_failed:
+                    self._quarantine("Operation receipt durability uncertain", operation_id, payload.get("document_id"))
             except BaseException as error:
-                self.quarantined = True
+                self._quarantine(error, operation_id, payload.get("document_id"))
                 self._diagnostic(error)
                 # Invalid/nonprimitive adapter results must not strand running state.
                 try:
                     self.store.complete(operation_id, "failed", "unknown",
-                                        {"error": "Receipt finalization failed", "cleanup_errors": [str(error)]})
+                                        {"error": "Receipt finalization failed", "cleanup_errors": [safe_text(error)]})
                 except BaseException as fallback_error:
                     self._diagnostic(fallback_error)
             finally:
-                # Ownership clears even when receipt serialization or refresh fails.
-                with self.lock:
-                    self.command_running = False
                 try:
                     if self.refresh:
                         self.refresh(uiapp)
                 except BaseException as error:
                     self._diagnostic(error)
-                with self.lock:
-                    self._schedule()
+                finally:
+                    # Refresh is API work too; release only after it finishes/fails.
+                    with self.lock:
+                        self.command_running = False
+                        self._schedule()
 
     def stop(self):
         """Expire tokens now; disposal waits for a pending/active callback."""
         with self.lock:
             self.stopping = True
             self.store.expire()
+            adapter = getattr(self, "adapter", None)
+            if adapter is not None:
+                adapter.registry.expire()
 
     def dispose_in_api_context(self):
         with self.lock:
@@ -141,9 +168,15 @@ class ExecutionRuntime(object):
             if self.event is not None:
                 self.event.Dispose()
                 self.event = None
+                self._handler = None
+            owner_state = getattr(self, "owner_state", None)
+            if owner_state is not None:
+                with owner_state["lock"]:
+                    if owner_state.get("runtime") is self:
+                        owner_state["runtime"] = None
 
 
-def create_external_event(runtime):
+def _create_external_event(runtime):
     """Call ONLY in a valid Revit API context; retain handler with the event."""
     from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
 
@@ -159,3 +192,205 @@ def create_external_event(runtime):
     runtime.bind_event(event)
     runtime._handler = handler
     return runtime
+
+
+class NativeExecutionAdapter(object):
+    """Wiring to the identity owner and completed execution service.
+
+    All methods named *_api require API context. No wrapper is retained here.
+    The injected service contract is execute_payload(data, doc, uidoc,
+    cancellation_check=...) -> (structured result, HTTP status).
+    """
+    def __init__(self, registry, execute_payload, safety=None, output_limit_chars=1000000):
+        from .execution_safety import ExecutionSafety
+        self.registry = registry
+        self.execute_payload = execute_payload
+        self.safety = safety or ExecutionSafety()
+        validate_output_limit(output_limit_chars)
+        self.output_limit_chars = output_limit_chars
+        self.safety_known = False
+        self.safe = False
+
+    def validate_cached(self, payload):
+        from .identity import IdentityError
+        try:
+            self.registry.validate_target(payload.get("instance_id"), payload.get("runtime_id"))
+            snapshot = self.registry.snapshot()
+            if not snapshot["documents_known"]:
+                raise OperationError("documents_unknown", "API-context snapshot is not initialized", 503)
+            if not any(doc["document_id"] == payload.get("document_id") for doc in snapshot["documents"]):
+                raise OperationError("stale_document", "Document token is not present in the cached snapshot", 409)
+            expected = payload.get("expected_revit_version")
+            if expected is not None and expected != snapshot["revit_version"]:
+                raise OperationError("version_mismatch", "Expected Revit version does not match", 409)
+        except IdentityError as error:
+            raise OperationError(error.code, safe_text(error), 409)
+
+    def validate_operation_cached(self, payload):
+        """Historical receipts require the runtime, never an open document."""
+        from .identity import IdentityError
+        try:
+            self.registry.validate_target(payload.get("instance_id"), payload.get("runtime_id"))
+        except IdentityError as error:
+            raise OperationError(error.code, safe_text(error), 409)
+
+    def observe_safety_api(self, uiapp):
+        """Observe ALL documents, not only the chosen document or owned scopes."""
+        self.safe = False
+        self.safety_known = False
+        documents = list(uiapp.Application.Documents)
+        for doc in documents:
+            if not doc.IsValidObject or doc.IsModifiable:
+                self.safety_known = True
+                return False
+        self.safe = self.safety_known = True
+        return True
+
+    def admit_cached(self, payload):
+        self.validate_cached(payload)
+        from .execution_safety import MutationBlockedError
+        try:
+            self.safety.require_safe()
+        except MutationBlockedError as error:
+            raise OperationError("host_quarantined", safe_text(error), 503)
+        if not self.safety_known or not self.safe:
+            raise OperationError("host_unsafe", "No known safe API-context host snapshot", 503)
+
+    def validate_api(self, payload, uiapp):
+        from .identity import IdentityError
+        self.validate_cached(payload)
+        if not self.observe_safety_api(uiapp):
+            self.safety.observe({"unsafe": True, "error_type": "UnsafeDocumentError", "cleanup_errors": []},
+                                payload.get("document_id"), payload.get("operation_id"))
+            raise OperationError("host_unsafe", "An open document is invalid or already modifiable", 503)
+        uidoc = uiapp.ActiveUIDocument
+        active_doc = uidoc.Document if uidoc is not None else None
+        try:
+            doc = self.registry.resolve_document(payload["instance_id"], payload["runtime_id"],
+                payload["document_id"], list(uiapp.Application.Documents), active_doc)
+        except IdentityError as error:
+            raise OperationError(error.code, safe_text(error), 409)
+        # No implicit activation. UI document is usable only with explicit opt-in.
+        from .target_registry import same_document
+        selected_uidoc = uidoc if (payload.get("allow_ui_change") is True and
+                                  active_doc is not None and same_document(doc, active_doc)) else None
+        if payload.get("allow_ui_change") and selected_uidoc is None:
+            raise OperationError("inactive_document", "UI work requires the selected active document", 409)
+        return doc, selected_uidoc, uiapp
+
+    def execute(self, payload, context, cancellation_check):
+        doc, uidoc, uiapp = context
+        try:
+            result, status = self.execute_payload(payload, doc, uidoc, cancellation_check=cancellation_check,
+                                                  output_limit_chars=self.output_limit_chars)
+        except BaseException as error:
+            result, status = {"status": "error", "effects": "unknown", "unsafe": True,
+                              "error": safe_text(error), "error_type": type(error).__name__, "cleanup_errors": []}, 500
+        # Other-doc raw transaction leaks also quarantine this exclusive host.
+        cleanup_errors = list(result.get("cleanup_errors", []))
+        try:
+            safe = self.observe_safety_api(uiapp)
+        except BaseException as error:
+            safe = False
+            cleanup_errors.append({"stage": "host_postcondition", "error": safe_text(error)})
+        unsafe = bool(result.get("unsafe") or not safe or cleanup_errors)
+        state = "succeeded" if status == 200 and result.get("status") == "success" else "failed"
+        if result.get("error_type") == "ExecutionCanceled":
+            state = "canceled"
+        elif result.get("error_type") == "OperationCanceledException":
+            # Revit's pick/interaction Esc outcome, separate from our cancel flag.
+            state = "canceled"
+            result["outcome"] = "user_canceled"
+        effects = result.get("effects", "unknown")
+        if unsafe:
+            state, effects = "failed", "unknown"
+            result["host_postcondition_unsafe"] = True
+        result["unsafe"] = unsafe
+        result["cleanup_errors"] = cleanup_errors
+        self.safety.observe(result, payload.get("document_id"), payload.get("operation_id"))
+        return {"state": state, "effects": effects, "result": result,
+                "unsafe": unsafe, "cleanup_errors": cleanup_errors}
+
+    def refresh_api(self, uiapp):
+        uidoc = uiapp.ActiveUIDocument
+        self.registry.refresh_documents(list(uiapp.Application.Documents),
+                                        uidoc.Document if uidoc is not None else None)
+
+
+def build_runtime_in_api_context(registry, uiapp, execute_payload, store=None,
+                                 experimental=False, exclusive=False, owner_state=None,
+                                 output_limit_chars=1000000, exclusion_receipt=None):
+    """Construct the adapter without installing routes or modifying startup.
+
+    Caller MUST own an exclusive listener/registration mode: all legacy API
+    work excluded, no other private lane bound to this host. Native lifecycle
+    evidence is still required before adoption. This factory never enables it
+    implicitly, and creates no event until its flags explicitly request one.
+    """
+    from .operation_store import OperationStore
+    # The composition owner retains this SAME map/safety/lock across engine reload.
+    # Refuse to synthesize a private guard or competing lane for an enabled host.
+    if experimental and exclusive:
+        from .routing_policy import ROUTES
+        from .target_routing import get_process_safety
+        required = set(path for path in ROUTES if not path.startswith("/operations/"))
+        required.discard("/get_view/")
+        required.update(("/get_view/<view_name>", "/metadata/refresh/"))
+        if (not exclusion_receipt or exclusion_receipt.get("legacy_api_excluded") is not True or
+                exclusion_receipt.get("private_runtime_reload_guard") is not True or
+                required - set(exclusion_receipt.get("excluded_routes", []))):
+            raise ValueError("Enabled private lane requires complete request-only legacy exclusion and reload guard receipt")
+        retained = get_process_owner_state()
+        if owner_state is None:
+            owner_state = retained
+        if owner_state is not retained or owner_state["safety"] is not get_process_safety():
+            raise ValueError("Enabled native lane requires the shared process-retained owner and safety")
+        with owner_state["lock"]:
+            if owner_state.get("runtime") is not None:
+                raise RuntimeError("Another private lane owns this host; stop and safely dispose it first")
+    adapter = NativeExecutionAdapter(registry, execute_payload,
+                                      safety=owner_state["safety"] if owner_state else None,
+                                      output_limit_chars=output_limit_chars)
+    adapter.refresh_api(uiapp)
+    adapter.observe_safety_api(uiapp)
+    runtime_id = registry.snapshot()["runtime_id"]
+    store = store or OperationStore(runtime_id)
+    if store.runtime_id != runtime_id:
+        raise ValueError("Operation store belongs to another runtime")
+    runtime = ExecutionRuntime(store, adapter.validate_cached, adapter.validate_api,
+                               adapter.execute, experimental, exclusive, adapter.refresh_api,
+                               admission_guard=adapter.admit_cached)
+    runtime.adapter = adapter
+    if experimental and exclusive:
+        with owner_state["lock"]:
+            if owner_state.get("runtime") is not None:
+                raise RuntimeError("Another private lane owns this host; stop and safely dispose it first")
+            runtime.owner_state = owner_state
+            owner_state["runtime"] = runtime
+            try:
+                _create_external_event(runtime)
+            except BaseException:
+                # Retain a lease if partial event creation cannot be safely disposed.
+                if runtime.event is None:
+                    owner_state["runtime"] = None
+                else:
+                    runtime.stop()
+                raise
+    return runtime
+
+
+OWNER_SLOT = "revit_mcp.execution.owner.v1"
+
+
+def get_process_owner_state():
+    """API-context composition seam. Native cross-engine retention is unproven."""
+    from System import AppDomain
+    from .target_routing import get_process_safety
+    domain = AppDomain.CurrentDomain
+    owner = domain.GetData(OWNER_SLOT)
+    if owner is None:
+        owner = {"lock": threading.RLock(), "runtime": None, "safety": get_process_safety()}
+        domain.SetData(OWNER_SLOT, owner)
+    if not isinstance(owner, dict) or "lock" not in owner or "safety" not in owner:
+        raise RuntimeError("Retained runtime owner unavailable; cannot create a competing lane")
+    return owner

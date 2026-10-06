@@ -149,7 +149,7 @@ def test_denied_wakeup_retains_admission_and_duplicate_retries_wakeup():
 
 def test_registry_bounds_and_expired_receipt_does_not_replay():
     now = [0]
-    store = OperationStore("generation", max_operations=1, max_receipt_bytes=100,
+    store = OperationStore("generation", max_operations=1, max_receipt_bytes=128,
                            retention_seconds=2, clock=lambda: now[0])
     store.admit(payload())
     store.take_next()
@@ -163,9 +163,76 @@ def test_registry_bounds_and_expired_receipt_does_not_replay():
     assert failure.value.code == "registry_full"
 
 
+def test_truncation_keeps_structured_error_and_partial_output():
+    import json
+    store = OperationStore("generation", max_receipt_bytes=1024)
+    store.admit(payload())
+    store.take_next()
+    receipt = store.complete("one", "failed", "committed", {
+        "error_type": "AssertionError", "error": "assert failed", "partial_output": "x" * 5000,
+        "traceback": "trace" * 5000, "script_location": {"filename": "trial.py", "line": 42},
+        "code_attempted": "y" * 10000})
+    result = receipt["result"]
+    assert result["receipt_truncated"]
+    assert result["error_type"] == "AssertionError"
+    assert result["partial_output"].startswith("x")
+    assert result["script_location"]["line"] == 42
+    assert receipt["effects"] == "committed"
+    assert len(json.dumps(result).encode("utf-8")) <= 1024
+
+
+def test_unicode_diagnostics_cannot_exceed_smallest_receipt_bound():
+    import json
+    store = OperationStore("generation", max_receipt_bytes=128)
+    store.admit(payload())
+    store.take_next()
+    receipt = store.complete("one", "failed", "unknown", {
+        "error_type": "雪" * 1000, "error": "雪" * 1000})
+    assert len(json.dumps(receipt["result"], ensure_ascii=True).encode("utf-8")) <= 128
+
+
 def test_live_wrappers_cannot_enter_registry():
     with pytest.raises(TypeError):
         OperationStore("generation").admit(payload(wrapper=object()))
+
+
+def test_refresh_reentry_cannot_overlap_next_operation():
+    seen = []
+    engine = runtime(lambda p, c: (seen.append(p["operation_id"]) or
+                                  dict(state="succeeded", effects="none", result={})))
+    def refresh(_):
+        engine.on_external_event(None)
+        assert len(seen) == 1
+    engine.refresh = refresh
+    engine.submit(payload())
+    engine.submit(payload("two"))
+    engine.on_external_event(None)
+    assert seen == ["one"]
+    assert engine.store.inspect("two")["state"] == "queued"
+
+
+def test_unprintable_failure_cannot_strand_running_ownership():
+    class BrokenError(Exception):
+        def __str__(self):
+            raise RuntimeError("error formatter failed")
+    def execute(p, c):
+        raise BrokenError()
+    engine = runtime(execute, refresh=lambda _: (_ for _ in ()).throw(BrokenError()))
+    engine.submit(payload())
+    engine.on_external_event(None)
+    assert not engine.command_running
+    receipt = engine.store.inspect("one")
+    assert receipt["state"] == "failed" and receipt["effects"] == "unknown"
+    assert "unprintable" in receipt["result"]["error"]
+
+
+def test_receipt_serialization_failure_is_terminal_unknown_and_clears_owner():
+    engine = runtime(lambda p, c: dict(state="succeeded", effects="committed", result={"wrapper": object()}))
+    engine.submit(payload())
+    engine.on_external_event(None)
+    receipt = engine.store.inspect("one")
+    assert (receipt["state"], receipt["effects"]) == ("failed", "unknown")
+    assert engine.quarantined and not engine.command_running
 
 
 def test_disabled_without_exclusive_opt_in():

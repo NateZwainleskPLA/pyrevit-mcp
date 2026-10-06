@@ -30,9 +30,23 @@ expiry. When tombstone capacity is reached admission stops rather than silently
 reusing an ID. Deduplication covers every submitted payload field and occurs
 before queue capacity checks. There is no durable guarantee in stage 1.
 
+Final public signatures:
+`submit_revit_execution(target, document, operation_id, code, ...)`,
+`get_revit_operation(target, operation_id)`, and
+`cancel_revit_operation(target, operation_id)`. Submission is document-scoped.
+Inspection/cancellation are runtime-scoped: they require full instance/runtime
+identity and operation ownership, but can inspect a historical document's
+receipt after it closes. Historical `document_id`/`actual_target` provenance
+remains in the receipt. Tools validate a successful operation ID as well as
+the router's successful full target/runtime identities.
+
 Creating the private event requires a valid API context. Opt-in requires both
-`experimental=True` and `exclusive=True`; exclusive asserts that every legacy
-API-context route is disabled or shares one exclusion mechanism. Disabling
+`experimental=True` and `exclusive=True`, a complete request-only exclusion
+receipt from routing's `startup.register_routes(legacy_api_enabled=False)`,
+including `private_runtime_reload_guard=true`,
+and the same process-retained owner/safety guard used by all mutation paths.
+The factory refuses missing exclusion endpoints, independent guards, or an
+existing private lane (even one stopping or awaiting a callback). Disabling
 only the legacy execute-code endpoint is insufficient. Arbitrary Python cannot
 be guaranteed read-only, so this implementation does not bypass that gate for
 scripts claiming to read only. No default adoption is allowed until the listener
@@ -43,6 +57,31 @@ operation queued; retrying its original ID/payload can retry the wakeup without
 re-admitting it. Diagnostic history is bounded. `stop()` expires the generation
 and clears queued payloads without replay; `dispose_in_api_context()` refuses
 active/pending callbacks. A pending callback must drain before disposal.
+
+`build_runtime_in_api_context(registry, uiapp, execute_payload, ...)` is the
+composition seam; it installs no routes or startup changes itself. The adapter
+uses the identity owner's cached/full-ID methods and execution foundations'
+`execute_payload(..., cancellation_check=..., output_limit_chars=...)`. It checks
+all open documents before and after execution, so a raw transaction leak in
+another document also quarantines the exclusive host. The shared
+`get_process_safety()` is retained by routing in CLR AppDomain; the private
+owner uses a separate retained slot for the same guard and single runtime
+lease. Unsafe state is never reset by a successful result or connector reload.
+Cross-engine retention is still a native acceptance gate.
+
+Reload must not re-enable synchronous handlers while a retained private lease
+exists. The routing startup owner must check the retained owner slot before
+legacy registration; unreadable ownership must fail closed. A stopping or
+pending runtime continues owning the host until safe disposal succeeds.
+Until the routing owner publishes the reload-guard receipt marker, this
+factory refuses native activation even with the earlier exclusion receipt.
+
+Stream capture has a trusted configurable retained-character limit during
+execution. Receipt truncation preserves structured errors, script location,
+partial output and provenance within the receipt budget, marking truncation.
+Effects and identity remain outside truncated diagnostics. Revit's native
+OperationCanceledException maps to `canceled`/`user_canceled`; effects still
+follow the transaction evidence, and no dialog or pick is forcibly dismissed.
 
 Stage 2 adds POST `/operations/cancel/`, `cancel_revit_operation`, atomic queued
 removal and a primitive running cancellation flag. The zero-argument
@@ -85,9 +124,33 @@ not share its ownership.
 Outstanding integration/native checks
 -------------------------------------
 
-- Integrate only completed identity, routing and execution-foundation commits.
-  Wire their final validation, transaction effects and transport interfaces.
-- Demonstrate exclusion of all legacy API-context work against the private lane.
+Completed local stages: `41a5338` registry/runner/inspection, `d8e82e6`
+cancellation, `0f6e34e` journaling. Dependency equivalents imported here:
+
+| Owner commit | Local equivalent |
+| --- | --- |
+| Transport `6ef7b249`, `2d1d8fa9` | `a9d08ec`, `34578fe` |
+| Status `0f1b703` | `ce5e528` |
+| Identity `8101dda0`, `5a97fb56` | `f7e71c4`, `1f8e33f` |
+| Execution `ae58f06d`, `5831b986`, `2d161784`, `7d63c3b7` | `9645189`, `e5276e7`, `5d97be2`, `d06feea` |
+| Routing policy `7a4aaf6`, router `40838db` | `6fe9a01`, `3e973ba` (policy introduced here during dependency-order resolution) |
+| Routing cutover `3a26b329`, recovery `f6781d78`, confirmation `25db62f9` | `1d6689b`, `aa778cc`, `c342504` |
+
+Verification uses the repository's unit suite only, CPython compile checks,
+and Python 2.7 AST parsing of the three native operation modules. The actual
+ExternalEvent creation helper follows Autodesk's
+[External Events API contract](https://help.autodesk.com/cloudhelp/2025/CHS/Revit-API/files/Revit_API_Developers_Guide/Advanced_Topics/Revit_API_Revit_API_Developers_Guide_Advanced_Topics_External_Events_html.html).
+API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
+
+- Completed identity, routing, transport and execution-foundation commits are
+  integrated; tests exercise their real modules with inert Revit doubles.
+- Routing startup reload-guard marker is a remaining composition prerequisite;
+  earlier receipts cannot activate this factory. No repeated polling is needed:
+  import the completed owner follow-up when it is published.
+- Demonstrate request-only legacy exclusion, accepted-worker draining and the
+  one-owner lease in a fresh disposable native initialization. Do not switch an
+  already-serving host by calling register_routes again: queued legacy workers
+  and old listeners require lifecycle evidence before a mode cutover is safe.
 - In an explicitly supplied disposable Revit 2025 fixture, verify API-thread
   execution, target/document invalidation, native transaction effects/cleanup,
   busy inspection, callback lifetime and startup/reload/restart lifecycle.

@@ -8,6 +8,7 @@ import time
 import os
 import tempfile
 from collections import deque
+from .execution_output import safe_text
 
 
 TERMINAL = frozenset(("succeeded", "failed", "canceled", "unknown_after_restart"))
@@ -39,6 +40,8 @@ class OperationStore(object):
         if not runtime_id or min(max_queue, max_operations, max_payload_bytes,
                                  max_receipt_bytes, retention_seconds) <= 0:
             raise ValueError("runtime and positive bounds required")
+        if max_receipt_bytes < 128:
+            raise ValueError("Receipt bound must hold at least 128 bytes of diagnostics")
         self.runtime_id = runtime_id
         self.max_queue, self.max_operations = max_queue, max_operations
         self.retention_seconds = retention_seconds
@@ -64,7 +67,7 @@ class OperationStore(object):
         except Exception as error:
             self.durability_failed = True
             receipt["durability"] = "uncertain"
-            receipt["journal_error"] = str(error)[:2048]
+            receipt["journal_error"] = safe_text(error)[:2048]
             if admission:
                 raise OperationError("journal_unavailable", "Admission receipt could not be persisted; no execution admitted", 503)
 
@@ -113,6 +116,9 @@ class OperationStore(object):
             for key in ("target", "document", "identity", "instance_id", "document_id"):
                 if key in payload:
                     receipt[key] = primitive_copy(payload[key])
+            if "instance_id" in payload:
+                receipt["actual_target"] = dict((key, payload[key]) for key in
+                                                 ("instance_id", "runtime_id", "document_id") if key in payload)
             # Durable admission MUST precede queue visibility and event wakeup.
             self._persist("admission", receipt, admission=True)
             self.records[operation_id] = {"payload": payload, "receipt": receipt}
@@ -156,7 +162,26 @@ class OperationStore(object):
         result = primitive_copy(result)
         encoded = json.dumps(result, ensure_ascii=True)
         if len(encoded.encode("utf-8")) > self.max_receipt_bytes:
-            result = {"receipt_truncated": True, "preview": encoded[:self.max_receipt_bytes // 6]}
+            # Keep structured diagnostics rather than returning an opaque JSON prefix.
+            budget = self.max_receipt_bytes // 24
+            def bounded(value, depth=0):
+                if isinstance(value, type(u"")):
+                    return value[:budget]
+                if isinstance(value, list):
+                    return [bounded(item, depth + 1) for item in value[:8]] if depth < 3 else []
+                if isinstance(value, dict):
+                    return dict((key, bounded(item, depth + 1)) for key, item in
+                                list(value.items())[:32]) if depth < 3 else {}
+                return value
+            result = bounded(result)
+            result.pop("code_executed", None)
+            result.pop("code_attempted", None)
+            result["receipt_truncated"] = True
+            if len(json.dumps(result, ensure_ascii=True).encode("utf-8")) > self.max_receipt_bytes:
+                result = {"receipt_truncated": True, "error_type": safe_text(result.get("error_type", ""))[:32],
+                          "error": safe_text(result.get("error", "Receipt diagnostics exceeded retention limit"))[:16]}
+                if len(json.dumps(result, ensure_ascii=True).encode("utf-8")) > self.max_receipt_bytes:
+                    result = {"receipt_truncated": True, "error": "Diagnostic limit exceeded"}
         with self.lock:
             record = self.records[operation_id]
             if record["receipt"]["state"] not in ("running", "waiting_for_user"):
@@ -198,7 +223,7 @@ class OperationStore(object):
             if receipt["state"] not in ("running", "waiting_for_user"):
                 raise OperationError("invalid_transition", "Interaction requires running work")
             receipt["state"] = "waiting_for_user" if active else "running"
-            receipt["interaction"] = str(description or "Known native interaction")[:1024] if active else None
+            receipt["interaction"] = safe_text(description or "Known native interaction")[:1024] if active else None
 
     def has_queued(self):
         with self.lock:
