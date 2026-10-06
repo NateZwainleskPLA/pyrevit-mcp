@@ -132,6 +132,14 @@ async def test_revit_error_over_http_success_is_not_a_transport_error():
     assert result.kind == "revit_error" and result.failure_kind is None
 
 
+async def test_legacy_receiver_error_without_status_is_recognized():
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(
+            500, json={"error": "placement failed", "traceback": "placement.py:302"}))) as client:
+        result = await request_revit("POST", URL, client=client)
+    assert result.revit_error and result.kind == "revit_error"
+    assert result.failure_kind is None and result.status_code == 500
+
+
 async def test_recoverable_error_note_is_not_a_revit_exception():
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(
             409, json={"status": "name_collision", "error": "Choose another name"}))) as client:

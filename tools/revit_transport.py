@@ -24,6 +24,8 @@ class RevitTransportResult:
     failure_kind: str | None = None
     error: str | None = None
     exception_type: str | None = None
+    # Delivery ambiguity only. False does not prove absence of model/file
+    # effects; a valid receipt's own state/effects remain authoritative.
     mutation_outcome_unknown: bool = False
 
     @property
@@ -43,7 +45,8 @@ class RevitTransportResult:
         status = self.body.get("status")
         return (isinstance(status, str) and
                 (status.lower() in {"error", "failed"} or
-                 status.lower().endswith("_failed"))) or self.body.get("success") is False
+                 status.lower().endswith("_failed"))) or self.body.get("success") is False or (
+                     not status and bool(self.body.get("error") or self.body.get("traceback")))
 
     @property
     def kind(self) -> str:
@@ -54,6 +57,28 @@ class RevitTransportResult:
         if not self.http_success:
             return "http_error"
         return "json_response"
+
+
+class RevitResponse(dict):
+    """Legacy dictionary view with full transport data available internally.
+
+    No client-owned keys are inserted into the receiver's payload. Existing
+    dictionary consumers keep working; new routing code should use the result
+    directly rather than infer success from this view's type.
+    """
+
+    def __init__(self, result: RevitTransportResult):
+        super().__init__(result.body)
+        self.transport_result = result
+
+
+class RevitResponseText(str):
+    """Legacy text view retaining non-object JSON and transport failure data."""
+
+    def __new__(cls, text: str, result: RevitTransportResult):
+        value = super().__new__(cls, text)
+        value.transport_result = result
+        return value
 
 
 async def request_revit(
