@@ -5,6 +5,8 @@ import hashlib
 import json
 import threading
 import time
+import os
+import tempfile
 from collections import deque
 
 
@@ -33,7 +35,7 @@ def payload_hash(payload):
 class OperationStore(object):
     def __init__(self, runtime_id, max_queue=32, max_operations=4096,
                  retention_seconds=14400, max_payload_bytes=1048576,
-                 max_receipt_bytes=262144, clock=None):
+                 max_receipt_bytes=262144, clock=None, journal=None):
         if not runtime_id or min(max_queue, max_operations, max_payload_bytes,
                                  max_receipt_bytes, retention_seconds) <= 0:
             raise ValueError("runtime and positive bounds required")
@@ -45,6 +47,26 @@ class OperationStore(object):
         self.lock = threading.RLock()
         self.records, self.queue = {}, deque()
         self.expired = False
+        self.journal = journal
+        self.durability_failed = False
+        if journal is not None:
+            for receipt in journal.load(runtime_id):
+                self.records[receipt["operation_id"]] = {"payload": None, "receipt": receipt}
+            if len(self.records) > self.max_operations:
+                raise OperationError("registry_full", "Recovered receipt capacity exceeded", 503)
+
+    def _persist(self, kind, receipt, admission=False):
+        if self.journal is None:
+            return
+        receipt["durability"] = "journal"
+        try:
+            self.journal.write(kind, receipt)
+        except Exception as error:
+            self.durability_failed = True
+            receipt["durability"] = "uncertain"
+            receipt["journal_error"] = str(error)[:2048]
+            if admission:
+                raise OperationError("journal_unavailable", "Admission receipt could not be persisted; no execution admitted", 503)
 
     def _ensure_live(self):
         if self.expired:
@@ -55,10 +77,12 @@ class OperationStore(object):
         now = self.clock()
         for record in self.records.values():
             end = record["receipt"].get("completed_at")
-            if end is not None and now - end >= self.retention_seconds:
+            if (end is not None and now - end >= self.retention_seconds
+                    and not record["receipt"].get("receipt_expired")):
                 record["payload"] = None
                 record["receipt"].pop("result", None)
                 record["receipt"]["receipt_expired"] = True
+                self._persist("retention", record["receipt"])
 
     def admit(self, payload):
         payload = primitive_copy(payload)
@@ -76,6 +100,8 @@ class OperationStore(object):
                 if existing["receipt"]["payload_hash"] != digest:
                     raise OperationError("operation_conflict", "Operation ID already has a different payload")
                 return copy.deepcopy(existing["receipt"]), False
+            if self.durability_failed:
+                raise OperationError("journal_unavailable", "Journal uncertainty blocks new admission", 503)
             if len(self.queue) >= self.max_queue:
                 raise OperationError("queue_full", "Execution queue is full", 503)
             if len(self.records) >= self.max_operations:
@@ -87,6 +113,8 @@ class OperationStore(object):
             for key in ("target", "document", "identity", "instance_id", "document_id"):
                 if key in payload:
                     receipt[key] = primitive_copy(payload[key])
+            # Durable admission MUST precede queue visibility and event wakeup.
+            self._persist("admission", receipt, admission=True)
             self.records[operation_id] = {"payload": payload, "receipt": receipt}
             self.queue.append(operation_id)
             return copy.deepcopy(receipt), True
@@ -104,10 +132,23 @@ class OperationStore(object):
             self._ensure_live()
             if not self.queue:
                 return None
-            operation_id = self.queue.popleft()
-            record = self.records[operation_id]
-            record["receipt"].update(state="running", started_at=self.clock(), effects="unknown")
-            return operation_id, copy.deepcopy(record["payload"])
+            while self.queue:
+                operation_id = self.queue.popleft()
+                record = self.records[operation_id]
+                record["receipt"].update(state="running", started_at=self.clock(), effects="unknown")
+                if self.durability_failed:
+                    record["receipt"].update(state="failed", effects="none", completed_at=self.clock(),
+                                              durability="uncertain", result={"error": "Journal unavailable before execution"})
+                    record["payload"] = None
+                    continue
+                self._persist("start", record["receipt"])
+                if self.durability_failed:
+                    record["receipt"].update(state="failed", effects="none", completed_at=self.clock(),
+                                              result={"error": "Start receipt failed; executor was not entered"})
+                    record["payload"] = None
+                    continue
+                return operation_id, copy.deepcopy(record["payload"])
+            return None
 
     def complete(self, operation_id, state, effects, result):
         if state not in TERMINAL or effects not in EFFECTS:
@@ -123,6 +164,7 @@ class OperationStore(object):
             record["receipt"].update(state=state, effects=effects, result=result,
                                       completed_at=self.clock())
             record["payload"] = None
+            self._persist("completion", record["receipt"])
             return copy.deepcopy(record["receipt"])
 
     def cancel(self, operation_id):
@@ -135,11 +177,14 @@ class OperationStore(object):
             receipt = record["receipt"]
             if receipt["state"] in TERMINAL:
                 return copy.deepcopy(receipt)
+            if receipt.get("cancellation_requested"):
+                return copy.deepcopy(receipt)
             receipt["cancellation_requested"] = True
             if receipt["state"] == "queued":
                 self.queue.remove(operation_id)
                 receipt.update(state="canceled", effects="none", completed_at=self.clock())
                 record["payload"] = None
+            self._persist("completion" if receipt["state"] == "canceled" else "cancellation", receipt)
             return copy.deepcopy(receipt)
 
     def cancellation_requested(self, operation_id):
@@ -167,3 +212,106 @@ class OperationStore(object):
                 if record["receipt"]["state"] not in TERMINAL:
                     record["receipt"].update(state="unknown_after_restart", effects="unknown")
                 record["payload"] = None
+
+
+class ReceiptJournal(object):
+    """Atomic, fsynced bounded local receipts. No code/payload replay is stored.
+
+    A deployment must provide a private directory and one owning runtime. This
+    claims local receipt persistence only; disk/controller loss is outside it.
+    Old generations are inspectable using load(old_runtime_id), never enqueued.
+    """
+    def __init__(self, directory, max_records=4096, max_record_bytes=524288):
+        if max_records <= 0 or max_record_bytes <= 0:
+            raise ValueError("Positive journal bounds required")
+        self.directory = os.path.abspath(directory)
+        self.max_records, self.max_record_bytes = max_records, max_record_bytes
+        self.lock = threading.RLock()
+        if not os.path.isdir(self.directory):
+            os.makedirs(self.directory)
+
+    def _path(self, runtime_id, operation_id):
+        digest = payload_hash([runtime_id, operation_id])
+        return os.path.join(self.directory, digest + ".json")
+
+    def _files(self):
+        # Stop counting at the bound, rather than reading arbitrary directory size.
+        names = []
+        for name in os.listdir(self.directory):
+            if name.endswith(".json"):
+                names.append(name)
+                if len(names) > self.max_records:
+                    raise OperationError("journal_full", "Journal capacity exceeded", 503)
+        return names
+
+    def _read(self, path):
+        with open(path, "rb") as source:
+            raw = source.read(self.max_record_bytes + 1)
+        if len(raw) > self.max_record_bytes:
+            raise ValueError("Journal record exceeds bound")
+        data = json.loads(raw.decode("utf-8"))
+        if data.get("version") != 1 or not isinstance(data.get("receipt"), dict):
+            raise ValueError("Unsupported/corrupt journal receipt")
+        receipt = data["receipt"]
+        if os.path.abspath(path) != self._path(receipt["runtime_id"], receipt["operation_id"]):
+            raise ValueError("Journal identity/filename mismatch")
+        return data
+
+    def write(self, kind, receipt):
+        with self.lock:
+            path = self._path(receipt["runtime_id"], receipt["operation_id"])
+            exists = os.path.exists(path)
+            if not exists and len(self._files()) >= self.max_records:
+                raise OperationError("journal_full", "Journal receipt capacity reached", 503)
+            events = self._read(path)["events"] if exists else []
+            events.append({"kind": kind, "state": receipt["state"], "effects": receipt["effects"],
+                           "at": receipt.get("completed_at", receipt.get("started_at", receipt["admitted_at"]))})
+            content = {"version": 1, "receipt": primitive_copy(receipt), "events": events[-8:]}
+            raw = json.dumps(content, ensure_ascii=True, allow_nan=False).encode("utf-8")
+            if len(raw) > self.max_record_bytes:
+                raise ValueError("Journal receipt exceeds bound")
+            descriptor, temporary = tempfile.mkstemp(prefix=".receipt-", suffix=".tmp", dir=self.directory)
+            try:
+                with os.fdopen(descriptor, "wb") as destination:
+                    destination.write(raw)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                self._replace(temporary, path)
+                self._sync_directory()
+            finally:
+                if os.path.exists(temporary):
+                    os.remove(temporary)
+
+    def _replace(self, temporary, path):
+        if hasattr(os, "replace"):
+            os.replace(temporary, path)
+        elif os.name == "nt":
+            # IronPython 2.7 lacks os.replace; never delete the old receipt first.
+            from System.IO import File
+            if File.Exists(path):
+                File.Replace(temporary, path, None)
+            else:
+                File.Move(temporary, path)
+        else:
+            os.rename(temporary, path)
+
+    def _sync_directory(self):
+        if os.name != "nt":
+            descriptor = os.open(self.directory, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+
+    def load(self, runtime_id):
+        """Read receipts; EVERY unfinished admission is uncertain, never replayed."""
+        with self.lock:
+            receipts = []
+            for name in self._files():
+                receipt = self._read(os.path.join(self.directory, name))["receipt"]
+                if receipt["runtime_id"] == runtime_id:
+                    if receipt["state"] not in TERMINAL:
+                        receipt.update(state="unknown_after_restart", effects="unknown",
+                                       recovery_note="No automatic replay; reconcile saved/model state")
+                    receipts.append(receipt)
+            return receipts

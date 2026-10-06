@@ -54,6 +54,34 @@ is reserved for an adapter with evidence of an active native interaction; elapse
 time does not imply waiting for a dialog. Nothing forcibly interrupts Python,
 closes dialogs or picks, or rolls back another command's transactions.
 
+Stage 3 adds `ReceiptJournal(private_directory, ...)` and optional
+`OperationStore(..., journal=journal)`. Receipts contain no executable payload.
+Admission is atomically replaced and file-flushed before queue publication;
+start is recorded before executor entry; completion follows recorded effects.
+POSIX directory metadata is also flushed. IronPython/Windows uses
+`System.IO.File.Replace` when `os.replace` is unavailable, without deleting the
+previous receipt first. Native Windows/IronPython replacement and controller
+crash durability still require testing; this is a local receipt guarantee, not
+an exactly-once execution guarantee or protection from storage loss.
+
+Failed admission writes reject execution. Failed start writes prevent executor
+entry. Failures after work begins retain in-memory effects/results with
+`durability=uncertain`, and the store blocks new/queued work. A duplicate can
+still inspect its existing receipt. A successful HTTP response does not remove
+the durability uncertainty. Corrupt journals fail closed.
+
+All unfinished receipts loaded on restart become `unknown_after_restart` with
+unknown effects, including queued admissions. Nothing is replayed. A store can
+load retained receipts for its own generation; archived generation receipts
+can be inspected locally with `journal.load(old_runtime_id)`. The current
+target endpoint cannot pretend an expired runtime is live. Archive access is
+local-only in this delivery; a future explicitly authorized recovery endpoint
+would need an independent archive identity contract. Terminal output retention
+prunes to hash tombstones; bounded archive capacity rejects admission rather
+than deleting uncertain work or permitting ID reuse. Provision a private
+extension-owned directory and one journal writer; concurrent processes must
+not share its ownership.
+
 Outstanding integration/native checks
 -------------------------------------
 
