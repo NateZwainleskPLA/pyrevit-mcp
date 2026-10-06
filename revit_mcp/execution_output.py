@@ -4,6 +4,7 @@
 Requires serialized execution in one IronPython engine: sys streams are global.
 """
 import sys
+import threading
 import traceback
 try:
     from StringIO import StringIO
@@ -12,9 +13,28 @@ except ImportError:
 try:
     text_type = unicode
     string_types = (basestring,)
+    integer_types = (int, long)
 except NameError:
     text_type = str
     string_types = (str,)
+    integer_types = (int,)
+
+
+DEFAULT_OUTPUT_LIMIT_CHARS = 1000000
+
+
+def validate_output_limit(limit):
+    if isinstance(limit, bool) or not isinstance(limit, integer_types) or limit < 0:
+        raise ValueError("output_limit_chars must be a nonnegative integer")
+
+
+class CaptureBudget(object):
+    """One retained-character budget shared by stdout and stderr."""
+    def __init__(self, limit):
+        validate_output_limit(limit)
+        self.limit = limit
+        self.retained = 0
+        self.lock = threading.RLock()
 
 
 def safe_text(value):
@@ -28,16 +48,28 @@ class CaptureStream(object):
     """Retain written text even when the backing buffer fails to read/close."""
     encoding = "utf-8"
 
-    def __init__(self, buffer_factory):
+    def __init__(self, buffer_factory, budget):
         self.buffer = buffer_factory()
         self.parts = []
+        self.budget = budget
+        self.dropped = 0
 
     def write(self, value):
         if isinstance(value, bytes) and not isinstance(value, text_type):
             value = value.decode("utf-8", "replace")
         value = text_type(value)
-        self.parts.append(value)
-        return self.buffer.write(value)
+        length = len(value)
+        with self.budget.lock:
+            retained = value[:max(0, self.budget.limit - self.budget.retained)]
+            self.dropped += length - len(retained)
+            if retained:
+                # Never append empty writes/overflows: list overhead is bounded
+                # by the retained budget, even for arbitrarily many small writes.
+                self.budget.retained += len(retained)
+                self.parts.append(retained)
+                self.buffer.write(retained)
+        # Truncation is diagnostic only and never aborts model execution.
+        return length
 
     def flush(self):
         return self.buffer.flush()
@@ -67,21 +99,22 @@ def exception_details(error, exc_info, filename):
 
 
 def execute_script(code, namespace, script_name="<revit-script>", buffer_factory=StringIO,
-                   runner=None):
+                   runner=None, output_limit_chars=DEFAULT_OUTPUT_LIMIT_CHARS):
     """Execute code and always restore both streams, including BaseException.
 
     This primitive does no routing, transaction management, or replay. The
     filename is a diagnostic basename only; no server-side file is read.
     """
     filename = script_name.replace("\\", "/").split("/")[-1]
+    budget = CaptureBudget(output_limit_chars)
     old_stdout, old_stderr = sys.stdout, sys.stderr
     stdout, stderr = None, None
     result = {"status": "success", "output": u"", "stderr": u"",
               "script_name": filename}
     cleanup_errors = []
     try:
-        stdout = CaptureStream(buffer_factory)
-        stderr = CaptureStream(buffer_factory)
+        stdout = CaptureStream(buffer_factory, budget)
+        stderr = CaptureStream(buffer_factory, budget)
         sys.stdout, sys.stderr = stdout, stderr
         compiled = compile(code, filename, "exec")
         # eval accepts exec-mode code objects on Python 2 and 3. Calling the
@@ -115,4 +148,11 @@ def execute_script(code, namespace, script_name="<revit-script>", buffer_factory
                            "error": "Output capture cleanup failed"})
     if result["status"] == "error":
         result["partial_output"] = result["output"]
+    stdout_dropped = stdout.dropped if stdout is not None else 0
+    stderr_dropped = stderr.dropped if stderr is not None else 0
+    result["output_truncated"] = bool(stdout_dropped)
+    result["stderr_truncated"] = bool(stderr_dropped)
+    result["output_capture"] = {"limit_chars": budget.limit, "retained_chars": budget.retained,
+                                "stdout_dropped_chars": stdout_dropped,
+                                "stderr_dropped_chars": stderr_dropped}
     return result

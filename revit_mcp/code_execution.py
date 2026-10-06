@@ -4,7 +4,8 @@ import json
 import logging
 
 from pyrevit import routes, revit, DB
-from .execution_output import execute_script, text_type, string_types
+from .execution_output import (execute_script, text_type, string_types,
+                               validate_output_limit, DEFAULT_OUTPUT_LIMIT_CHARS)
 from .execution_helpers import RevitHelpers, build_hints
 from .execution_context import ExecutionContext
 from .execution_revit import ScopedRevit
@@ -12,9 +13,11 @@ from .execution_revit import ScopedRevit
 logger = logging.getLogger(__name__)
 
 
-def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=None):
+def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=None,
+                    output_limit_chars=DEFAULT_OUTPUT_LIMIT_CHARS):
     """Return (structured result, HTTP status); caller owns identity validation."""
     try:
+        validate_output_limit(output_limit_chars)
         if isinstance(data, string_types):
             data = json.loads(data)
         if not isinstance(data, dict):
@@ -49,7 +52,8 @@ def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=Non
     namespace.update(RevitHelpers(DB, System).namespace())
     execution = ExecutionContext(DB, doc, transaction_mode, cancellation_check)
     namespace["execution"] = execution
-    result = execute_script(code, namespace, script_name, runner=execution.run)
+    result = execute_script(code, namespace, script_name, runner=execution.run,
+                            output_limit_chars=output_limit_chars)
     # Capture/compile may fail before the runner starts. No scope exists then,
     # but close still verifies the selected document's postcondition.
     execution.close()

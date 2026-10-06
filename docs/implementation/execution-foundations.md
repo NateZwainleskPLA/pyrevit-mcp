@@ -130,3 +130,26 @@ and exception rollback by readback, rollback-group flex trials, nested cleanup
 failure, native failure-processing Pending, cancellation at checkpoints,
 stdout/stderr restoration, inactive-document binding, and unsafe-result blocking
 across all mutation paths. No native test or extension reload has been performed.
+
+Bounded stream capture
+----------------------
+
+`execute_script(..., output_limit_chars=1000000)` and
+`execute_payload(..., output_limit_chars=1000000)` share one retained-character
+budget across stdout and stderr. The execution owner supplies this trusted
+configuration keyword; scripts cannot increase it through their JSON payload.
+The limit is a nonnegative integer, with zero retaining no output. Standard
+stream writes keep their prefix until the shared budget is exhausted and then
+drop excess text while code continues. Truncation never triggers rollback or
+changes execution effects. `output_truncated`, `stderr_truncated`, and
+`output_capture` (`limit_chars`, `retained_chars`, `stdout_dropped_chars`,
+`stderr_dropped_chars`) describe the loss. Partial output uses the same capped
+prefix. Whichever stream writes first consumes the shared budget.
+
+Both the buffer and fallback write journal retain bounded text; empty writes
+and discarded overflow do not append journal entries. Concurrent writes reserve
+the shared budget under a lock. This bounds capture memory during execution,
+including scripts that repeatedly print beyond the limit; it does not bound
+objects allocated by arbitrary script code, exception traces, or other receipts.
+The operation owner separately bounds serialized result/journal receipts. Native
+IronPython Unicode capture and stream-thread behavior still need the fixture.
