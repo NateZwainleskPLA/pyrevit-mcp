@@ -1,14 +1,17 @@
 import ast
 import copy
 import json
+import os
 from pathlib import Path
+import socket
+import sys
 import threading
 import time
 from types import SimpleNamespace
 
 import pytest
 
-from scripts.listener_lifecycle.collect import collect, evaluate, observe, owner_matches
+from scripts.listener_lifecycle.collect import collect, evaluate, observe, owner_matches, socket_owner
 from scripts.listener_lifecycle.source_audit import audit, selected
 
 ROOT = Path(__file__).resolve().parents[2] / 'scripts/listener_lifecycle'
@@ -213,6 +216,17 @@ def test_collector_never_sends_request_after_owner_mismatch(monkeypatch, tmp_pat
     assert json.loads(output.read_text())['observations'] == []
     assert not owner_matches([], 17, START)
     assert not owner_matches([{'process_id': 17, 'process_started_at': '2026-10-05T13:00:00Z'}], 17, START)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Real Windows socket ownership query')
+def test_windows_socket_owner_query_uses_local_python_fixture():
+    # No Revit host: catch embedded PowerShell syntax and actual OS-query errors.
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+        rows = socket_owner(listener.getsockname()[1])
+    assert rows and all(row['process_id'] == os.getpid() for row in rows)
+    assert owner_matches(rows, os.getpid(), rows[0]['process_started_at'])
 
 
 def test_collector_persists_partial_receipt_on_ownership_inspection_failure(monkeypatch, tmp_path):

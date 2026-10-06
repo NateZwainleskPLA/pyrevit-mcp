@@ -28,7 +28,7 @@ def same_instant(left, right):
 
 def socket_owner(port):
     # Fixed script plus validated integer; no user text is interpolated as shell code.
-    script = """+$rows = @(Get-NetTCPConnection -State Listen -LocalPort PORT -ErrorAction Stop |
+    script = """$rows = @(Get-NetTCPConnection -State Listen -LocalPort PORT -ErrorAction Stop |
     ForEach-Object {
         $p = Get-Process -Id $_.OwningProcess -ErrorAction Stop
         @{process_id=$p.Id; process_started_at=$p.StartTime.ToUniversalTime().ToString('o')}
