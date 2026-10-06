@@ -13,7 +13,17 @@ from urllib.parse import quote
 
 
 def instant(value):
-    return datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(timezone.utc)
+    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    if parsed.tzinfo is None:
+        raise ValueError('Process start time requires an explicit timezone')
+    return parsed.astimezone(timezone.utc)
+
+
+def same_instant(left, right):
+    try:
+        return instant(left) == instant(right)
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def socket_owner(port):
@@ -32,7 +42,7 @@ ConvertTo-Json -InputObject $rows -Compress
 
 def owner_matches(rows, pid, started_at):
     return bool(rows) and all(row['process_id'] == pid and
-                             instant(row['process_started_at']) == instant(started_at)
+                             same_instant(row.get('process_started_at'), started_at)
                              for row in rows)
 
 
@@ -77,7 +87,7 @@ def evaluate(rows, pid, started_at, previous_generation=None):
     state_ok = (state.get('status') == 200 and isinstance(body, dict) and
                 body.get('process_id') == pid and
                 body.get('process_started_at') is not None and
-                instant(body['process_started_at']) == instant(started_at) and
+                same_instant(body['process_started_at'], started_at) and
                 not body.get('stopped', True))
     stale = next((r for r in rows if '?generation=' in r['path']), None)
     return {

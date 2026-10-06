@@ -196,6 +196,10 @@ def test_outage_evaluation_does_not_confuse_probe_and_native_health():
     checks = evaluate(rows, 17, START, 'old')
     assert checks['diagnostic_ready'] and not checks['native_sisters_responded']
     assert not evaluate(rows, 18, START)['diagnostic_ready']
+    rows[0]['body']['process_started_at'] = 'invalid-start-time'
+    assert not evaluate(rows, 17, START)['diagnostic_ready']
+    rows[0]['body']['process_started_at'] = '2026-10-05T12:00:00'
+    assert not evaluate(rows, 17, START)['diagnostic_ready']
 
 
 def test_collector_never_sends_request_after_owner_mismatch(monkeypatch, tmp_path):
