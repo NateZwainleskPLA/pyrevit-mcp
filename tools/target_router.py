@@ -52,8 +52,11 @@ class TargetRouter:
         if result is not None and result.http_success and not result.revit_error:
             body = result.body if isinstance(result.body, dict) else {}
             actual = body.get("actual_target", body)
-            if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in identities.items()):
+            expected_operation = (data or {}).get("operation_id") if endpoint.startswith("/operations/") else None
+            wrong_operation = expected_operation is not None and body.get("operation_id") != expected_operation
+            if (not isinstance(actual, dict) or any(actual.get(key) != value for key, value in identities.items())
+                    or wrong_operation):
                 return replace(result, failure_kind="invalid_identity_response",
-                               error="Successful response did not confirm the addressed target/document",
+                               error="Successful response did not confirm the addressed target/document/operation",
                                mutation_outcome_unknown=method.upper() == "POST")
         return result

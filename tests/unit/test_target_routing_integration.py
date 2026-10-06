@@ -120,3 +120,53 @@ async def test_closed_document_after_admission_never_executes(connected):
     result = await router.call("POST", "/save_document/", target=targets[0][0], document=targets[0][1])
     assert result.status_code == 409
     assert executions == []
+
+
+@pytest.mark.parametrize("endpoint", ["/operations/inspect/", "/operations/cancel/"])
+async def test_retired_document_does_not_block_historical_operation_receipt(connected, endpoint):
+    router, targets, hosts, executions, before = connected
+    target, document, doc = targets[0]
+    resolved = router.directory.resolve(target, document)
+    historical = {key: resolved[key] for key in ("instance_id", "runtime_id", "document_id")}
+    host = hosts[resolved["endpoint"]]
+    doc.IsValidObject = False
+    remaining = host["uiapp"].Application.Documents[1:]
+    host["uiapp"].Application.Documents = remaining
+    host["uiapp"].ActiveUIDocument = SimpleNamespace(Document=remaining[0])
+    router.directory.observe(host["registry"].refresh_documents(remaining, remaining[0]))
+    with pytest.raises(IdentityError) as error:
+        router.directory.resolve(target, document)
+    assert error.value.code == "expired_document"
+    requests = []
+
+    async def receipt(method, url, **kwargs):
+        requests.append(kwargs["data"])
+        return RevitTransportResult(method=method, url=url, status_code=200, json_received=True,
+            body={"actual_target": historical, "operation_id": "original", "effects": "none",
+                  "state": "canceled" if endpoint.endswith("/cancel/") else "succeeded"})
+    router.request = receipt
+    result = await router.call("POST", endpoint, target=target, data={"operation_id": "original"})
+    assert result.failure_kind is None
+    assert result.body["actual_target"]["document_id"] == historical["document_id"]
+    assert "document_id" not in requests[0]
+    assert executions == []
+
+
+@pytest.mark.parametrize("foreign", ["runtime", "operation"])
+async def test_operation_receipt_rejects_foreign_runtime_or_operation(connected, foreign):
+    router, targets, hosts, executions, before = connected
+    target = targets[0][0]
+    resolved = router.directory.resolve(target)
+    actual = {key: resolved[key] for key in ("instance_id", "runtime_id")}
+    body = {"actual_target": actual, "operation_id": "original"}
+    if foreign == "runtime":
+        actual["runtime_id"] = "another runtime"
+    else:
+        body["operation_id"] = "another operation"
+
+    async def receipt(method, url, **kwargs):
+        return RevitTransportResult(method=method, url=url, status_code=200, json_received=True, body=body)
+    router.request = receipt
+    result = await router.call("POST", "/operations/inspect/", target=target, data={"operation_id": "original"})
+    assert result.failure_kind == "invalid_identity_response"
+    assert result.body is body
