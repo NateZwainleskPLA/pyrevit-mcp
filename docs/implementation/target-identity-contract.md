@@ -84,6 +84,53 @@ handshake. Do not load native pyRevit pickle records in the MCP process: they
 are trusted only through pyRevit's registration API inside its host. Configured
 remote endpoint discovery uses the same handshake contract.
 
+Native startup and discovery composition
+----------------------------------------
+
+`revit_mcp.target_runtime.initialize_identity(api)` runs at extension startup,
+using pyRevit `serverinfo.register()` for this process's endpoint. It retains only
+the process UUID as JSON in CLR AppDomain process storage; every initialization
+creates a new runtime UUID. Owned CLR event delegates are retained separately
+and removed before replacement. Startup does not activate or change the Routes
+listener. It collects once when startup has API context, then collects on
+document open/close, view activation, and throttled Idling API callbacks.
+
+Registration evidence is written atomically to
+`%APPDATA%/pyRevit/RevitMCP/registrations/<pid>.json`, or
+`REVIT_MCP_REGISTRATION_DIR`. It is derived from native pyRevit registration.
+It does not contain live document wrappers or substitute for a metadata handshake.
+Failure to publish logs a diagnostic; configured endpoint discovery still works.
+
+`tools.target_discovery.TargetDiscovery(directory, candidates=configured_candidates,
+handshake=metadata_handshake, local_validator=validate_local_ownership)` provides
+`await discover() -> {namespace, targets, errors}` and `await revalidate(target)`.
+Candidates are injected records `{endpoint, registration?, source?}`. Registration
+records take precedence over duplicate port probes. Default discovery reads only
+connector JSON records and probes a bounded configured range; it never unpickles
+pyRevit records. Environment variables are `REVIT_HOST`, `REVIT_PORT_SCAN_START`
+(or `REVIT_PORT`), and `REVIT_PORT_SCAN_COUNT` (default 6, maximum 256).
+For a remotely accessed connector, `REVIT_MCP_ADVERTISED_HOST` can explicitly
+advertise its reachable host name while keeping pyRevit's listening host setting.
+The client must probe that advertised API-root address; no address guessing occurs.
+
+Only a successful HTTP 200 `/metadata/` JSON response qualifies, with redirects
+disabled. Metadata must agree with the probed endpoint and all supplied record
+identities. Windows loopback discovery additionally checks process creation time
+and listener port ownership using the Windows process/TCP APIs. Remote targets
+use the full metadata handshake; it does not establish authentication. A local
+ownership inspector can be injected for another platform; absence of local proof
+fails closed. A rejected probe does not select or substitute another process.
+`await discovery.verified_handshake(endpoint)` is the public injection seam for
+the routing transport: it returns raw metadata after the same ownership checks.
+`tools.windows_target_evidence.process_started_at(pid)` returns an exact UTC
+ISO-8601 creation timestamp (six fractional digits) for launch verification.
+
+`tools.target_tools.register_target_tools(mcp, directory, discovery)` registers
+`list_revit_targets(ctx)` and `get_revit_target_metadata(target, ctx)`. Both return
+structured dictionaries. The composition root injects a shared directory and
+discovery object. Registration in `main.py` and the existing `tools/__init__.py`
+belongs to the routing workstream, together with its public target cutover.
+
 Validation and limits
 ---------------------
 
@@ -92,6 +139,9 @@ invalid-wrapper comparison, stale runtime, process/PID/port reuse, conflicting
 registration, concurrent allocation across threads/processes, persistent restart
 revalidation, state loss/non-reuse, and out-of-order snapshots. These tests do
 not establish native Revit API context, wrapper lifetime across pyRevit engines,
-or listener/event reload behavior. No disposable native fixture was supplied.
+or listener/event reload behavior. The Windows ownership adapter was tested
+against the test process and its own disposable TCP socket; it contacted no
+Revit process. Mock lifecycle tests establish owned-delegate replacement only
+within the controlled host double. No disposable native fixture was supplied.
 The foundation does not make the legacy mutation tools explicitly targeted;
 that receiver/tool cutover belongs to the routing workstream.

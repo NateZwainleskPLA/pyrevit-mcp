@@ -42,6 +42,9 @@ class TargetDirectory:
                                  "retired INTEGER NOT NULL DEFAULT 0, UNIQUE(target, token))")
                 row = self._db.execute("SELECT value FROM directory_state WHERE key='namespace'").fetchone()
                 if row is None:
+                    if self._db.execute("SELECT COUNT(*) FROM targets").fetchone()[0] or \
+                            self._db.execute("SELECT COUNT(*) FROM directory_state").fetchone()[0]:
+                        raise IdentityError("directory_unavailable", "partial directory state cannot reset its namespace")
                     self._db.executemany("INSERT INTO directory_state VALUES (?, ?)",
                                          [("namespace", str(uuid.uuid4())), ("counter", "0"), ("version", "1")])
                 elif self._db.execute("SELECT value FROM directory_state WHERE key='version'").fetchone()[0] != "1":
@@ -91,6 +94,7 @@ class TargetDirectory:
                     same_identity = (old["instance"], old["runtime"]) == (data["instance_id"], data["runtime_id"])
                     if same_identity:
                         if any(meta[k] != data[k] for k in ("process_id", "process_started_at")):
+                            self._verified.discard(old["handle"])
                             raise IdentityError("identity_conflict", "same UUIDs claim a different process lifetime")
                         continue
                     same_process = (urlsplit(meta["endpoint"]).hostname == urlsplit(data["endpoint"]).hostname
