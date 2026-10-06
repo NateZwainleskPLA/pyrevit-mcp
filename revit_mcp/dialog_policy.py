@@ -94,6 +94,11 @@ class DialogPolicy(object):
         self._responses = dict(responses)
         self._enabled = enabled
 
+    def snapshot(self):
+        """Expose copied primitive configuration for diagnostics/dedup inputs."""
+        return {"enabled": self._enabled, "catalog": copy.deepcopy(self._catalog),
+                "responses": dict(self._responses)}
+
     def decide(self, dialog_id, event_type, revit_build):
         """Return (reason, action snapshot); None action means leave untouched."""
         if not self._enabled:
@@ -161,6 +166,7 @@ class DialogSubscription(object):
     def snapshot(self):
         with self._lock:
             return {"attached": self._attached, "active": self._active,
+                    "policy": self._policy.snapshot(),
                     "dropped_receipts": self._dropped,
                     "receipts": copy.deepcopy(self._receipts)}
 

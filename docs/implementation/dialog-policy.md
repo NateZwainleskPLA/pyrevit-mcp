@@ -57,12 +57,15 @@ Missing evidence, undocumented selections, malformed fields, booleans as result
 codes, zero, and values outside Int32 are rejected before subscription changes.
 Configuration strings are a review requirement, not a machine proof of their
 truth: never construct the catalog from arbitrary remote request data.
+`policy.snapshot()` returns copied primitive `enabled`, `catalog` and `responses`
+configuration for diagnostics and the execution owner's deduplication inputs.
 
 `policy.decide(dialog_id, event_type, revit_build)` returns `(reason, action)`;
 `action=None` means untouched. Policy configuration and returned actions are
 copied. The callback attempts exactly one documented code, with no fallback.
 `subscription.snapshot()` returns primitive copies, attachment/activity state,
-bounded receipts (default 128, maximum 4096), and `dropped_receipts`. Each receipt
+current policy configuration, bounded receipts (default 128, maximum 4096), and
+`dropped_receipts`. Each receipt
 contains a sequence, timestamp, exact ID/type/build, selected action with its
 evidence, attempt flag, accepted flag, reason, and any exception details.
 `override_accepted` means only that Revit accepted this response code; it does

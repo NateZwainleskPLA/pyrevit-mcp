@@ -1,6 +1,7 @@
 """Offline contract tests; synthetic IDs/buttons establish no native support."""
 import importlib
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -291,3 +292,75 @@ def test_receipt_clock_failure_does_not_escape_native_callback():
     sub.start()
     host.fire(Event())
     assert sub.snapshot()["dropped_receipts"] == 1
+
+
+def test_diagnostics_expose_policy_opt_in_and_selections_without_events():
+    host = Host()
+    sub = subscribe(host, selected=policy())
+    configured = sub.snapshot()["policy"]
+    assert configured["enabled"] is True
+    assert configured["responses"] == {DIALOG: "continue_fixture"}
+    configured["catalog"].clear()
+    assert sub.snapshot()["policy"]["catalog"]
+
+
+def test_native_adapter_uses_loaded_build_and_retains_actual_delegate(monkeypatch):
+    import revit_mcp.dialog_policy as module
+
+    class NativeEvent:
+        def __init__(self):
+            self.handlers = []
+
+        def __iadd__(self, handler):
+            self.handlers.append(handler)
+            return self
+
+        def __isub__(self, handler):
+            self.handlers.remove(handler)
+            return self
+
+    class Delegate:
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, sender, event):
+            self.callback(sender, event)
+
+    class EventHandlerFactory:
+        def __getitem__(self, event_type):
+            assert event_type is Event
+            return Delegate
+
+    monkeypatch.setitem(sys.modules, "System", SimpleNamespace(EventHandler=EventHandlerFactory()))
+    monkeypatch.setitem(sys.modules, "Autodesk.Revit.UI.Events",
+                        SimpleNamespace(DialogBoxShowingEventArgs=Event))
+    uiapp = SimpleNamespace(Application=SimpleNamespace(VersionBuild=BUILD),
+                            DialogBoxShowing=NativeEvent())
+    state = {}
+    sub = module.initialize_for_uiapplication(uiapp, state, policy())
+    delegate = uiapp.DialogBoxShowing.handlers[0]
+    event = Event()
+    delegate(uiapp, event)
+    assert event.calls == [1002]
+    assert sub.snapshot()["receipts"][0]["revit_build"] == BUILD
+    assert isinstance(delegate, Delegate)
+    module.remove_subscription(state)
+    assert uiapp.DialogBoxShowing.handlers == []
+
+
+def test_attachment_failure_is_visible_and_retains_removable_state():
+    host, state = Host(), {}
+
+    def cannot_attach(handler):
+        raise RuntimeError("cannot subscribe")
+
+    with pytest.raises(RuntimeError, match="cannot subscribe"):
+        replace_subscription(state, DialogPolicy(), BUILD, cannot_attach,
+                             host.detach, lambda callback: callback)
+    assert state
+    assert host.handlers == []
+    sub = subscribe(host, state)
+    assert sub.snapshot()["active"] is True
+    assert len(host.handlers) == 1
+    remove_subscription(state)
+    assert not state
