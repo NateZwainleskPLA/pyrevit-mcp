@@ -16,6 +16,12 @@ api = routes.API("revit_mcp")
 def register_routes():
     """Register all MCP route modules"""
     try:
+        # Initialize identity after the status API-context correction. The metadata
+        # route reads cached primitives; native callbacks own document collection.
+        from revit_mcp.target_runtime import initialize_identity
+
+        initialize_identity(api)
+
         # Import and register status routes
         from revit_mcp.status import register_status_routes
 
