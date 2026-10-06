@@ -11,6 +11,8 @@ def register_family_tools(mcp, revit_get, revit_post):
 
     @mcp.tool()
     async def place_family(
+        target: str,
+        document: str,
         family_name: str,
         type_name: str = None,
         x: float = 0.0,
@@ -30,12 +32,18 @@ def register_family_tools(mcp, revit_get, revit_post):
             "level_name": level_name,
             "properties": properties or {},
         }
-        response = await revit_post("/place_family/", data, ctx)
+        response = await revit_post(
+            "/place_family/", data, ctx, target=target, document=document
+        )
         return format_response(response)
 
     @mcp.tool()
     async def list_families(
-        contains: str = None, limit: int = 50, ctx: Context = None
+        target: str,
+        document: str,
+        contains: str = None,
+        limit: int = 50,
+        ctx: Context = None,
     ) -> str:
         """
         Get a flat list of available family types in the current Revit model.
@@ -44,11 +52,17 @@ def register_family_tools(mcp, revit_get, revit_post):
         data = {"limit": limit}
         if contains:
             data["contains"] = contains
-        result = await revit_post("/list_families/", data, ctx)
+        result = await revit_post(
+            "/list_families/", data, ctx, target=target, document=document
+        )
         return format_response(result)
 
     @mcp.tool()
-    async def list_family_categories(ctx: Context = None) -> str:
+    async def list_family_categories(
+        target: str, document: str, ctx: Context = None
+    ) -> str:
         """Get a list of all family categories in the current Revit model"""
-        response = await revit_get("/list_family_categories/", ctx)
+        response = await revit_get(
+            "/list_family_categories/", ctx, target=target, document=document
+        )
         return format_response(response)

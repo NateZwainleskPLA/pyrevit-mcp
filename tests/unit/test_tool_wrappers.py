@@ -21,12 +21,12 @@ class TestStatusTools:
         self.mock_get = mock_revit_get
 
     async def test_get_revit_status(self):
-        await self.tools["get_revit_status"](ctx=None)
-        self.mock_get.assert_called_once_with("/status/", None, timeout=10.0)
+        await self.tools["get_revit_status"](ctx=None, target="r1")
+        self.mock_get.assert_called_once_with("/status/", None, timeout=10.0, target="r1")
 
     async def test_get_revit_model_info(self):
-        await self.tools["get_revit_model_info"](ctx=None)
-        self.mock_get.assert_called_once_with("/model_info/", None)
+        await self.tools["get_revit_model_info"](ctx=None, target="r1", document="d1")
+        self.mock_get.assert_called_once_with("/model_info/", None, target="r1", document="d1")
 
 
 # ---- Model tools ----
@@ -43,8 +43,8 @@ class TestModelTools:
         self.mock_get = mock_revit_get
 
     async def test_list_levels(self):
-        await self.tools["list_levels"](ctx=None)
-        self.mock_get.assert_called_once_with("/list_levels/", None)
+        await self.tools["list_levels"](ctx=None, target="r1", document="d1")
+        self.mock_get.assert_called_once_with("/list_levels/", None, target="r1", document="d1")
 
 
 # ---- View tools ----
@@ -61,24 +61,24 @@ class TestViewTools:
         self.mock_image = mock_revit_image
 
     async def test_list_revit_views(self):
-        await self.tools["list_revit_views"](ctx=None)
-        self.mock_get.assert_called_once_with("/list_views/", None)
+        await self.tools["list_revit_views"](ctx=None, target="r1", document="d1")
+        self.mock_get.assert_called_once_with("/list_views/", None, target="r1", document="d1")
 
     async def test_get_revit_view(self):
-        await self.tools["get_revit_view"](view_name="Level 1", ctx=None)
-        self.mock_image.assert_called_once_with("/get_view/Level 1", None)
+        await self.tools["get_revit_view"](view_name="Level 1", ctx=None, target="r1", document="d1")
+        self.mock_image.assert_called_once_with("/get_view/Level%201", None, target="r1", document="d1")
 
     async def test_get_current_view_info(self):
-        await self.tools["get_current_view_info"](ctx=None)
-        self.mock_get.assert_called_once_with("/current_view_info/", None)
+        await self.tools["get_current_view_info"](ctx=None, target="r1", document="d1")
+        self.mock_get.assert_called_once_with("/current_view_info/", None, target="r1", document="d1")
 
     async def test_get_current_view_elements(self):
-        await self.tools["get_current_view_elements"](ctx=None)
+        await self.tools["get_current_view_elements"](ctx=None, target="r1", document="d1")
         self.mock_post.assert_called_once_with(
             "/current_view_elements/",
             {"limit": 5000, "include_levels": False, "include_location": False},
             None,
-        )
+         target="r1", document="d1")
 
 
 # ---- Family tools ----
@@ -94,20 +94,20 @@ class TestFamilyTools:
         self.mock_post = mock_revit_post
 
     async def test_list_families_default(self):
-        await self.tools["list_families"](ctx=None)
+        await self.tools["list_families"](ctx=None, target="r1", document="d1")
         self.mock_post.assert_called_once_with(
             "/list_families/", {"limit": 50}, None
-        )
+        , target="r1", document="d1")
 
     async def test_list_families_with_filter(self):
-        await self.tools["list_families"](contains="Door", limit=10, ctx=None)
+        await self.tools["list_families"](contains="Door", limit=10, ctx=None, target="r1", document="d1")
         call_data = self.mock_post.call_args[0][1]
         assert call_data["contains"] == "Door"
         assert call_data["limit"] == 10
 
     async def test_list_family_categories(self):
-        await self.tools["list_family_categories"](ctx=None)
-        self.mock_get.assert_called_once_with("/list_family_categories/", None)
+        await self.tools["list_family_categories"](ctx=None, target="r1", document="d1")
+        self.mock_get.assert_called_once_with("/list_family_categories/", None, target="r1", document="d1")
 
     async def test_place_family(self):
         await self.tools["place_family"](
@@ -117,7 +117,7 @@ class TestFamilyTools:
             rotation=90.0,
             level_name="Level 1",
             ctx=None,
-        )
+         target="r1", document="d1")
         call_data = self.mock_post.call_args[0][1]
         assert call_data["family_name"] == "Basic Wall"
         assert call_data["type_name"] == "Generic - 200mm"
@@ -131,7 +131,7 @@ class TestFamilyTools:
             family_name="Door",
             properties={"Width": 1.0},
             ctx=None,
-        )
+         target="r1", document="d1")
         call_data = self.mock_post.call_args[0][1]
         assert call_data["properties"] == {"Width": 1.0}
 
@@ -149,7 +149,7 @@ class TestColorTools:
     async def test_color_splash(self):
         await self.tools["color_splash"](
             category_name="Walls", parameter_name="Type Name", ctx=None
-        )
+        , target="r1", document="d1")
         call_data = self.mock_post.call_args[0][1]
         assert call_data["category_name"] == "Walls"
         assert call_data["parameter_name"] == "Type Name"
@@ -163,24 +163,24 @@ class TestColorTools:
             use_gradient=True,
             custom_colors=["#FF0000", "#00FF00"],
             ctx=None,
-        )
+         target="r1", document="d1")
         call_data = self.mock_post.call_args[0][1]
         assert call_data["use_gradient"] is True
         assert call_data["custom_colors"] == ["#FF0000", "#00FF00"]
 
     async def test_clear_colors(self):
-        await self.tools["clear_colors"](category_name="Walls", ctx=None)
+        await self.tools["clear_colors"](category_name="Walls", ctx=None, target="r1", document="d1")
         self.mock_post.assert_called_once_with(
             "/clear_colors/", {"category_name": "Walls"}, None
-        )
+        , target="r1", document="d1")
 
     async def test_list_category_parameters(self):
         await self.tools["list_category_parameters"](
             category_name="Walls", ctx=None
-        )
+        , target="r1", document="d1")
         self.mock_post.assert_called_once_with(
             "/list_category_parameters/", {"category_name": "Walls"}, None
-        )
+        , target="r1", document="d1")
 
 
 # ---- Code execution tools ----
@@ -201,19 +201,19 @@ class TestCodeExecutionTools:
     async def test_execute_code(self):
         result = await self.tools["execute_revit_code"](
             code="print('hello')", ctx=None
-        )
+        , target="r1", document="d1")
         self.mock_post.assert_called_once_with(
             "/execute_code/",
             {"code": "print('hello')", "description": "Code execution"},
             None,
             timeout=60.0,
-        )
+         target="r1", document="d1", allow_ui_change=False)
         assert result == "hello"
 
     async def test_execute_code_custom_description(self):
         await self.tools["execute_revit_code"](
             code="x = 1", description="Set x", ctx=None
-        )
+        , target="r1", document="d1")
         call_data = self.mock_post.call_args[0][1]
         assert call_data["description"] == "Set x"
 
@@ -221,5 +221,5 @@ class TestCodeExecutionTools:
         self.mock_post.side_effect = ConnectionError("refused")
         result = await self.tools["execute_revit_code"](
             code="print(1)", ctx=None
-        )
+        , target="r1", document="d1")
         assert "Error during code execution" in result

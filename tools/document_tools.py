@@ -10,10 +10,12 @@ def register_document_tools(mcp, revit_get, revit_post):
 
     @mcp.tool()
     async def open_document(
+        target: str,
         ctx: Context,
         file_path: str,
         detach: bool = False,
         audit: bool = False,
+        allow_ui_change: bool = False,
     ) -> str:
         """Open a Revit document file in the running Revit instance.
 
@@ -31,13 +33,23 @@ def register_document_tools(mcp, revit_get, revit_post):
             "detach": detach,
             "audit": audit,
         }
-        response = await revit_post("/open_document/", data, ctx, timeout=120.0)
+        response = await revit_post(
+            "/open_document/",
+            data,
+            ctx,
+            timeout=120.0,
+            target=target,
+            allow_ui_change=allow_ui_change,
+        )
         return format_response(response)
 
     @mcp.tool()
     async def close_document(
+        target: str,
+        document: str,
         ctx: Context,
         save: bool = False,
+        allow_ui_change: bool = False,
     ) -> str:
         """Close the active Revit document.
 
@@ -46,11 +58,20 @@ def register_document_tools(mcp, revit_get, revit_post):
                   If False (default), close without saving.
         """
         data = {"save": save}
-        response = await revit_post("/close_document/", data, ctx)
+        response = await revit_post(
+            "/close_document/",
+            data,
+            ctx,
+            target=target,
+            document=document,
+            allow_ui_change=allow_ui_change,
+        )
         return format_response(response)
 
     @mcp.tool()
     async def save_document(
+        target: str,
+        document: str,
         ctx: Context,
         file_path: str = None,
     ) -> str:
@@ -63,11 +84,15 @@ def register_document_tools(mcp, revit_get, revit_post):
             file_path: Optional path for Save As. If omitted, saves in place.
         """
         data = {"file_path": file_path}
-        response = await revit_post("/save_document/", data, ctx)
+        response = await revit_post(
+            "/save_document/", data, ctx, target=target, document=document
+        )
         return format_response(response)
 
     @mcp.tool()
     async def sync_with_central(
+        target: str,
+        document: str,
         ctx: Context,
         comment: str = "",
         compact: bool = False,
@@ -89,5 +114,12 @@ def register_document_tools(mcp, revit_get, revit_post):
             "compact": compact,
             "relinquish_all": relinquish_all,
         }
-        response = await revit_post("/sync_with_central/", data, ctx, timeout=120.0)
+        response = await revit_post(
+            "/sync_with_central/",
+            data,
+            ctx,
+            timeout=120.0,
+            target=target,
+            document=document,
+        )
         return format_response(response)

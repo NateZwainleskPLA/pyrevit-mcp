@@ -11,16 +11,45 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
     _ = revit_get, revit_image  # Acknowledge unused parameters
 
     @mcp.tool()
+    async def execute_revit_script_file(
+        target: str, document: str, file_path: str,
+        description: str = "Script file execution", transaction_mode: str = "script",
+        allow_ui_change: bool = False, ctx: Context = None,
+    ) -> str:
+        """Read a local UTF-8/BOM script and execute its contents in the specified document.
+
+        The file is read on the MCP client machine, including for remote Revit.
+        Only the basename, content hash and code are transmitted. No server-side
+        file access or retry occurs. UI/transaction rules match execute_revit_code.
+        """
+        from scripts.execute_revit_file import read_script_file
+        try:
+            if transaction_mode not in ("script", "managed"):
+                raise ValueError("transaction_mode must be script or managed")
+            payload = read_script_file(file_path)
+            payload.update(description=description, transaction_mode=transaction_mode)
+            response = await revit_post("/execute_code/", payload, ctx, target=target,
+                                        document=document, allow_ui_change=allow_ui_change, timeout=60.0)
+            return format_response(response)
+        except (OSError, ValueError) as error:
+            return "Error reading/executing local script: {}".format(error)
+
+    @mcp.tool()
     async def execute_revit_code(
-        code: str, description: str = "Code execution", ctx: Context = None,
-        transaction_mode: str = "script", script_name: str = "<revit-script>",
-        allow_ui_change: bool = False
+        target: str,
+        document: str,
+        code: str,
+        description: str = "Code execution",
+        ctx: Context = None,
+        transaction_mode: str = "script",
+        script_name: str = "<revit-script>",
+        allow_ui_change: bool = False,
     ) -> str:
         """
         Execute IronPython code directly in Revit context.
 
         The code has access to:
-        - doc: The active Revit document
+        - doc: The explicitly targeted Revit document
         - uidoc: Supplied UIDocument only with allow_ui_change=true and routing validation
         - DB: Revit API Database namespace
         - revit: pyRevit module
@@ -72,13 +101,19 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
                 payload["transaction_mode"] = transaction_mode
             if script_name != "<revit-script>":
                 payload["script_name"] = script_name
-            if allow_ui_change:
-                payload["allow_ui_change"] = True
 
             if ctx:
                 await ctx.info("Executing code: {}".format(description))
 
-            response = await revit_post("/execute_code/", payload, ctx, timeout=60.0)
+            response = await revit_post(
+                "/execute_code/",
+                payload,
+                ctx,
+                timeout=60.0,
+                target=target,
+                document=document,
+                allow_ui_change=allow_ui_change,
+            )
             return format_response(response)
 
         except (ConnectionError, ValueError, RuntimeError) as e:

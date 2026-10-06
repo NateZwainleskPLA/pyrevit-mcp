@@ -2,7 +2,8 @@
 """Tool registration system for Revit MCP Server"""
 
 
-def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func):
+def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func,
+                   target_directory=None, target_discovery=None):
     """Register all tools with the MCP server"""
     # Import all tool modules
     from .status_tools import register_status_tools
@@ -23,5 +24,8 @@ def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func
     register_code_execution_tools(
         mcp_server, revit_get_func, revit_post_func, revit_image_func
     )
-    register_launch_tools(mcp_server, revit_get_func)
+    register_launch_tools(mcp_server, revit_get_func, discovery=target_discovery)
     register_document_tools(mcp_server, revit_get_func, revit_post_func)
+    if target_directory is not None and target_discovery is not None:
+        from .target_tools import register_target_tools
+        register_target_tools(mcp_server, target_directory, target_discovery)

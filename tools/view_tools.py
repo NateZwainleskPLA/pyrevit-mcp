@@ -3,24 +3,36 @@
 
 from mcp.server.fastmcp import Context
 from .utils import format_response
+from urllib.parse import quote
 
 
 def register_view_tools(mcp, revit_get, revit_post, revit_image):
     """Register view-related tools"""
 
     @mcp.tool()
-    async def get_revit_view(view_name: str, ctx: Context = None):
+    async def get_revit_view(
+        target: str, document: str, view_name: str, ctx: Context = None
+    ):
         """Export a specific Revit view as an image"""
-        return await revit_image(f"/get_view/{view_name}", ctx)
+        return await revit_image(
+            f"/get_view/{quote(view_name, safe='')}",
+            ctx,
+            target=target,
+            document=document,
+        )
 
     @mcp.tool()
-    async def list_revit_views(ctx: Context = None) -> str:
+    async def list_revit_views(target: str, document: str, ctx: Context = None) -> str:
         """Get a list of all exportable views in the current Revit model"""
-        response = await revit_get("/list_views/", ctx)
+        response = await revit_get(
+            "/list_views/", ctx, target=target, document=document
+        )
         return format_response(response)
 
     @mcp.tool()
-    async def get_current_view_info(ctx: Context = None) -> str:
+    async def get_current_view_info(
+        target: str, document: str, ctx: Context = None
+    ) -> str:
         """
         Get detailed information about the currently active view in Revit.
 
@@ -34,11 +46,15 @@ def register_view_tools(mcp, revit_get, revit_post, revit_image):
         """
         if ctx:
             await ctx.info("Getting current view information...")
-        response = await revit_get("/current_view_info/", ctx)
+        response = await revit_get(
+            "/current_view_info/", ctx, target=target, document=document
+        )
         return format_response(response)
 
     @mcp.tool()
     async def get_current_view_elements(
+        target: str,
+        document: str,
         limit: int = 5000,
         include_levels: bool = False,
         include_location: bool = False,
@@ -65,5 +81,7 @@ def register_view_tools(mcp, revit_get, revit_post, revit_image):
             "include_levels": include_levels,
             "include_location": include_location,
         }
-        response = await revit_post("/current_view_elements/", data, ctx)
+        response = await revit_post(
+            "/current_view_elements/", data, ctx, target=target, document=document
+        )
         return format_response(response)

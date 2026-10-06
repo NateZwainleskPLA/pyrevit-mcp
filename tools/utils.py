@@ -121,6 +121,8 @@ def _format_transport(result):
         text = format_response(result.body)
     else:
         text = json.dumps(result.body, indent=2, ensure_ascii=False)
+    if result.status_code is None:
+        return text
     if result.status_code != 200:
         try:
             phrase = HTTPStatus(result.status_code).phrase
