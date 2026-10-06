@@ -5,6 +5,7 @@ import logging
 
 from pyrevit import routes, revit, DB
 from .execution_output import execute_script, text_type, string_types
+from .execution_helpers import RevitHelpers, build_hints
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,13 @@ def execute_payload(data, doc, uidoc):
 
     namespace = {"doc": doc, "uidoc": uidoc, "DB": DB, "revit": revit,
                  "__builtins__": __builtins__}
+    import System
+    namespace.update(RevitHelpers(DB, System).namespace())
     result = execute_script(code, namespace, script_name)
+    if result["status"] == "error":
+        hints = build_hints(result.get("error_type", ""), result.get("error", ""))
+        if hints:
+            result["hints"] = hints
     result["description"] = description
     result["code_executed" if result["status"] == "success" else "code_attempted"] = code
     return result, 200 if result["status"] == "success" else 500

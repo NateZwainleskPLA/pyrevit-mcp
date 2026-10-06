@@ -13,6 +13,7 @@ def execution_route(monkeypatch):
     import importlib
     monkeypatch.setitem(sys.modules, "pyrevit", SimpleNamespace(
         DB=SimpleNamespace(), revit=SimpleNamespace(), routes=SimpleNamespace()))
+    monkeypatch.setitem(sys.modules, "System", SimpleNamespace())
     sys.modules.pop("revit_mcp.code_execution", None)
     return importlib.import_module("revit_mcp.code_execution")
 
