@@ -98,3 +98,15 @@ async def test_success_from_wrong_receiver_is_not_accepted_or_replayed():
     assert rejected.body == body
     assert rejected.mutation_outcome_unknown
     request.assert_awaited_once()
+
+
+@pytest.mark.parametrize("endpoint", ["/operations/inspect/", "/operations/cancel/"])
+async def test_operation_recovery_is_runtime_scoped_without_live_document(endpoint):
+    from tools.revit_transport import RevitTransportResult
+    request = AsyncMock(return_value=RevitTransportResult(
+        method="POST", url="fixture", status_code=200, json_received=True,
+        body={"instance_id": "instance1", "runtime_id": "runtime1", "operation_id": "original"}))
+    router = TargetRouter(Directory(), AsyncMock(), request)
+    result = await router.call("POST", endpoint, target="r1", data={"operation_id": "original"})
+    assert result.http_success and result.failure_kind is None
+    assert "document_id" not in request.await_args.kwargs["data"]

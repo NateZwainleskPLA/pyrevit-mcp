@@ -29,8 +29,11 @@ and is never replayed. Presentation uses `compatibility_response` and
 `format_response`. Image results include the image plus actual identity and the
 requested aliases. Local handle rejection has no fabricated HTTP status.
 
-The shared policy includes document-scoped POST `/operations/submit/`,
-`/operations/inspect/`, and `/operations/cancel/` for the operations workstream.
+The shared policy includes document-scoped POST `/operations/submit/` and
+runtime-scoped `/operations/inspect/` and `/operations/cancel/`. Inspection and
+cancellation require the original runtime and operation ID, not a live document;
+closing the execution document cannot strand a retained receipt. Historical
+document identity belongs to that receipt, rather than new live resolution.
 This workstream does not register those handlers or an asynchronous runner.
 
 Receiver interface

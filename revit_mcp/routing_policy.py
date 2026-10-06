@@ -24,8 +24,8 @@ ROUTES = {
     "/save_document/": (True, False, False),
     "/sync_with_central/": (True, False, False),
     "/operations/submit/": (True, False, False),
-    "/operations/inspect/": (True, False, False),
-    "/operations/cancel/": (True, False, False),
+    "/operations/inspect/": (False, False, False),
+    "/operations/cancel/": (False, False, False),
 }
 
 MUTATION_ROUTES = frozenset((
