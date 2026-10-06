@@ -240,11 +240,12 @@ class OperationStore(object):
 
 
 class ReceiptJournal(object):
-    """Atomic, fsynced bounded local receipts. No code/payload replay is stored.
+    """Atomic, fsynced bounded local receipts; no queued payload reconstruction.
 
     A deployment must provide a private directory and one owning runtime. This
     claims local receipt persistence only; disk/controller loss is outside it.
     Old generations are inspectable using load(old_runtime_id), never enqueued.
+    Terminal diagnostics may echo script code and require private storage.
     """
     def __init__(self, directory, max_records=4096, max_record_bytes=524288):
         if max_records <= 0 or max_record_bytes <= 0:

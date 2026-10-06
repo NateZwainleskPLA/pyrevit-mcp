@@ -97,7 +97,9 @@ time does not imply waiting for a dialog. Nothing forcibly interrupts Python,
 closes dialogs or picks, or rolls back another command's transactions.
 
 Stage 3 adds `ReceiptJournal(private_directory, ...)` and optional
-`OperationStore(..., journal=journal)`. Receipts contain no executable payload.
+`OperationStore(..., journal=journal)`. The journal does not reconstruct queued
+execution payloads for replay. Terminal diagnostics can include echoed script
+code from the execution service, so receipt storage must remain private.
 Admission is atomically replaced and file-flushed before queue publication;
 start is recorded before executor entry; completion follows recorded effects.
 POSIX directory metadata is also flushed. IronPython/Windows uses
@@ -127,8 +129,19 @@ not share its ownership.
 Outstanding integration/native checks
 -------------------------------------
 
-Completed local stages: `41a5338` registry/runner/inspection, `d8e82e6`
-cancellation, `0f6e34e` journaling. Dependency equivalents imported here:
+The Origin publication branch `pr/recoverable-operations` is based on completed
+`pr/explicit-target-routing` at `e1fb74b876fafeecff11cae4ac8b6d9c1af29b25`
+([routing PR #7](https://github.com/NateZwainleskPLA/pyrevit-mcp/pull/7)). It
+inherits that branch's canonical transport, status, identity and execution
+foundations, including launch/file tools and startup ownership guards. Merge
+the routing stack before this workstream. The shared proposal baseline is not
+part of the publication branch.
+
+Only the five owned build commits were replayed: `41a5338`
+registry/runner/inspection, `d8e82e6` cancellation, `0f6e34e` journaling,
+`d70606e` adapters/ownership, and `aa6ef1c` guarded construction. The following
+table records historical prerequisite equivalents in the preserved original
+build checkout; these patches were not separately replayed for publication:
 
 | Owner commit | Local equivalent |
 | --- | --- |
