@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["tools*", "revit_mcp*"]
+include = ["tools*", "revit_mcp*", "scripts*"]
 
 [project.optional-dependencies]
 test = [

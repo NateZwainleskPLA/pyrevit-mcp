@@ -103,3 +103,21 @@ satisfy readiness. Process exit stops the wait. Verified launch returns its own
 `launched_unverified` with process evidence and no invented handle. A requested
 file is reported separately from cached `file_open_verified` evidence. Native
 dialogs and actual execution availability still need disposable-host checks.
+
+Local file execution
+--------------------
+
+`execute_revit_script_file(target, document, file_path, ...)` reads the script on
+the MCP client machine and uses the same targeted `/execute_code/` route as inline
+execution. It accepts UTF-8 with an optional BOM, normalizes CRLF, and submits the
+code with its basename and SHA-256 of the submitted UTF-8 contents. It never sends
+a server-side file path to read. Errors retain basename/line diagnostics and
+partial output from the normal executor. Remote targets still use client-local
+files. Missing files or invalid UTF-8 fail before transport.
+
+The equivalent CLI is `python -m scripts.execute_revit_file --file edit.py
+--target <handle> --document <handle> --state <existing-directory.sqlite>`, with
+optional `--transaction-mode managed` and `--allow-ui-change`. It needs the same
+persistent directory used by the MCP server (or `REVIT_TARGET_STATE`); it cannot
+reuse another process's in-memory namespace. The file adapter performs one
+synchronous call and never replays an uncertain mutation.
