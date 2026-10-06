@@ -66,6 +66,7 @@ def register_routes(legacy_api_enabled=True):
                 receipt = targeted_api.assert_excluded(legacy)
                 metadata_api.assert_excluded(["/metadata/refresh/"])
                 receipt["excluded_routes"].append("/metadata/refresh/")
+                receipt["private_runtime_reload_guard"] = True
                 return receipt
             return {"legacy_api_excluded": False}
 

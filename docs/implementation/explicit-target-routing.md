@@ -83,6 +83,9 @@ idle owner, startup holds its lock through registration. An absent owner or a
 safely released lease permits default synchronous startup. This check imports no
 operations module, allocates no competing owner, and preserves blocked safety
 state. Native retention across engines remains unproven without fixture testing.
+The successful disabled-mode receipt includes `private_runtime_reload_guard=true`
+only after this guard and the complete legacy-route exclusion checks pass. This
+is composition evidence for the private factory, not native lifecycle acceptance.
 
 Validation and pending coverage
 -------------------------------

@@ -155,5 +155,19 @@ def test_explicit_disabled_mode_still_registers_only_http_rejections(startup_hos
     loaded = load_startup()
     receipt = loaded["register_routes"](legacy_api_enabled=False)
     assert receipt["legacy_api_excluded"]
+    assert receipt["private_runtime_reload_guard"] is True
     for path in receipt["excluded_routes"]:
         assert list(inspect.signature(api.handlers[path]).parameters) == ["request"]
+
+
+def test_disabled_receipt_is_not_issued_after_private_lease_acquisition(startup_host):
+    slots, domain, api, initialize, events = startup_host
+    loaded = load_startup()
+    owner = {"lock": threading.RLock(), "runtime": object(), "safety": slots[SAFETY_SLOT]}
+    slots[PRIVATE_OWNER_SLOT] = owner
+    initialize.reset_mock()
+    prior_handlers = dict(api.handlers)
+    with pytest.raises(RuntimeError, match="private execution lane owns"):
+        loaded["register_routes"](legacy_api_enabled=False)
+    initialize.assert_not_called()
+    assert api.handlers == prior_handlers
