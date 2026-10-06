@@ -89,3 +89,17 @@ Historical integration tests are skipped without
 `REVIT_MCP_DISPOSABLE_FIXTURE`; their old lifecycle harness still needs targeted
 fixture adaptation before native use. No deployment or open-model mutation was
 performed.
+
+Launch verification
+-------------------
+
+Launch retains `Popen`, obtains the child's Windows process start timestamp, and
+waits for discovery metadata with that exact PID/lifetime/version. It accepts
+only a local loopback endpoint, valid UUID metadata, initialized API-context
+document snapshots and a final successful revalidation. Unrelated processes,
+remote hosts, reused PIDs, generic HTTP errors and superseded generations never
+satisfy readiness. Process exit stops the wait. Verified launch returns its own
+`target`, `actual_target` and document handles; otherwise it returns
+`launched_unverified` with process evidence and no invented handle. A requested
+file is reported separately from cached `file_open_verified` evidence. Native
+dialogs and actual execution availability still need disposable-host checks.
