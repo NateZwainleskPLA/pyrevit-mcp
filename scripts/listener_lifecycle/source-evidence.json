@@ -1,0 +1,25 @@
+{
+  "coverage": "source-level doubles; no native outage reproduction",
+  "source_files": [
+    {
+      "path": "D:\\OneDrive - PLA Designs\\Documents\\Dev\\pyRevit MCP\\Dev\\pyRevit\\pyrevitlib\\pyrevit\\routes\\server\\server.py",
+      "sha256": "6dc37314095bc11bbd6c0038ccf65d731e05d0d3ebb9774a4840d89cba51ddf5"
+    },
+    {
+      "path": "D:\\OneDrive - PLA Designs\\Documents\\Dev\\pyRevit MCP\\Dev\\pyRevit\\pyrevitlib\\pyrevit\\routes\\server\\__init__.py",
+      "sha256": "defd0405e478e889324e17aaa0109fd847a5400e74d33ea3c3bf881d94f5987b"
+    }
+  ],
+  "first_activation_worker_count": 2,
+  "repeat_activation_worker_count": 2,
+  "retained_worker_count": 1,
+  "events": [
+    "start",
+    "start",
+    "socket.close",
+    "HTTPServer.shutdown",
+    "join"
+  ],
+  "duplicate_serve_loops": true,
+  "socket_closed_before_shutdown": true
+}
