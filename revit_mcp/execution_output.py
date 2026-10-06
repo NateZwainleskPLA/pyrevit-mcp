@@ -66,7 +66,8 @@ def exception_details(error, exc_info, filename):
             "script_location": location}
 
 
-def execute_script(code, namespace, script_name="<revit-script>", buffer_factory=StringIO):
+def execute_script(code, namespace, script_name="<revit-script>", buffer_factory=StringIO,
+                   runner=None):
     """Execute code and always restore both streams, including BaseException.
 
     This primitive does no routing, transaction management, or replay. The
@@ -85,7 +86,10 @@ def execute_script(code, namespace, script_name="<revit-script>", buffer_factory
         compiled = compile(code, filename, "exec")
         # eval accepts exec-mode code objects on Python 2 and 3. Calling the
         # Python 3 exec function syntax would be a tuple statement on Python 2.
-        eval(compiled, namespace, namespace)
+        if runner is None:
+            eval(compiled, namespace, namespace)
+        else:
+            runner(compiled, namespace)
     except BaseException as error:
         result["status"] = "error"
         result.update(exception_details(error, sys.exc_info(), filename))

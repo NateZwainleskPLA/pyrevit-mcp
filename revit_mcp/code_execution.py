@@ -6,11 +6,13 @@ import logging
 from pyrevit import routes, revit, DB
 from .execution_output import execute_script, text_type, string_types
 from .execution_helpers import RevitHelpers, build_hints
+from .execution_context import ExecutionContext
+from .execution_revit import ScopedRevit
 
 logger = logging.getLogger(__name__)
 
 
-def execute_payload(data, doc, uidoc):
+def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=None):
     """Return (structured result, HTTP status); caller owns identity validation."""
     try:
         if isinstance(data, string_types):
@@ -26,15 +28,37 @@ def execute_payload(data, doc, uidoc):
         description = data.get("description", "Code execution")
         if not isinstance(description, string_types):
             raise ValueError("description must be a string")
+        transaction_mode = data.get("transaction_mode", "script")
+        if transaction_mode not in ("script", "managed"):
+            raise ValueError("transaction_mode must be 'script' or 'managed'")
+        if transaction_mode == "managed" and doc is None:
+            raise ValueError("managed mode requires a document")
+        allow_ui_change = data.get("allow_ui_change", False)
+        if not isinstance(allow_ui_change, bool):
+            raise ValueError("allow_ui_change must be a boolean")
     except (ValueError, TypeError) as error:
         return {"status": "error", "error": text_type(error),
-                "error_type": type(error).__name__}, 400
+                "error_type": type(error).__name__, "effects": "none", "unsafe": False}, 400
 
-    namespace = {"doc": doc, "uidoc": uidoc, "DB": DB, "revit": revit,
+    scoped_uidoc = uidoc if allow_ui_change else None
+    scoped_revit = (ScopedRevit(revit, doc, scoped_uidoc)
+                    if revit_context is None else revit_context)
+    namespace = {"doc": doc, "uidoc": scoped_uidoc, "DB": DB, "revit": scoped_revit,
                  "__builtins__": __builtins__}
     import System
     namespace.update(RevitHelpers(DB, System).namespace())
-    result = execute_script(code, namespace, script_name)
+    execution = ExecutionContext(DB, doc, transaction_mode, cancellation_check)
+    namespace["execution"] = execution
+    result = execute_script(code, namespace, script_name, runner=execution.run)
+    # Capture/compile may fail before the runner starts. No scope exists then,
+    # but close still verifies the selected document's postcondition.
+    execution.close()
+    summary = execution.summary()
+    summary["cleanup_errors"] = result.get("cleanup_errors", []) + summary["cleanup_errors"]
+    result.update(summary)
+    if result["unsafe"] and result["status"] == "success":
+        result.update({"status": "error", "error_type": "UnsafeDocumentError",
+                       "error": "Document postcondition is unsafe", "partial_output": result["output"]})
     if result["status"] == "error":
         hints = build_hints(result.get("error_type", ""), result.get("error", ""))
         if hints:
