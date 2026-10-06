@@ -15,7 +15,7 @@ def test_export_path_uses_view_policy_and_unknown_route_fails_closed():
         route_policy("/new_mutation/")
 
 
-@pytest.mark.parametrize("endpoint", ["/current_view_info/", "/current_view_elements/", "/color_splash/", "/clear_colors/", "/close_document/"])
+@pytest.mark.parametrize("endpoint", ["/current_view_info/", "/current_view_elements/", "/color_splash/", "/clear_colors/"])
 @pytest.mark.parametrize("allow", [False, True])
 def test_inactive_ui_document_never_activates(endpoint, allow):
     with pytest.raises(RoutingPolicyError):

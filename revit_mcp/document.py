@@ -5,7 +5,6 @@ Handles opening, closing, saving documents and syncing with central.
 """
 
 from pyrevit import routes, revit, DB
-from Autodesk.Revit.UI import RevitCommandId, PostableCommand
 import json
 import logging
 import traceback
@@ -78,7 +77,8 @@ def register_document_routes(api):
             )
 
             # After opening, get the now-active document
-            new_doc = revit.doc
+            new_uidoc = uiapp.ActiveUIDocument
+            new_doc = new_uidoc.Document if new_uidoc is not None else None
             if new_doc:
                 result = {
                     "status": "success",
@@ -131,7 +131,7 @@ def register_document_routes(api):
     @api.route("/close_document/", methods=["POST"])
     def close_document(doc, request):
         """
-        Close the active Revit document.
+        Close the explicitly resolved inactive Revit document.
 
         Expected payload:
         {
@@ -152,40 +152,22 @@ def register_document_routes(api):
                 )
 
             doc_title = doc.Title if doc.Title else "Untitled"
-
-            logger.info(
-                "Closing document: {} (save={})".format(doc_title, save)
-            )
-
-            if save:
-                try:
-                    doc.Save()
-                except Exception as save_err:
-                    logger.warning(
-                        "Save before close failed: {}".format(str(save_err))
-                    )
-
-            # Use PostCommand to close the active document since
-            # doc.Close() is not allowed on the active document from the API
             uiapp = revit.HOST_APP.uiapp
-            close_cmd = RevitCommandId.LookupPostableCommandId(
-                PostableCommand.Close
-            )
-            uiapp.PostCommand(close_cmd)
-
-            return routes.make_response(
-                data={
-                    "status": "success",
-                    "message": "Document '{}' close command sent{}.".format(
-                        doc_title,
-                        " (saved first)" if save else "",
-                    ),
-                    "document_title": doc_title,
-                    "saved": save,
-                    "note": "Revit may show a confirmation dialog if there "
-                    "are unsaved changes.",
-                }
-            )
+            active_uidoc = uiapp.ActiveUIDocument
+            if active_uidoc is not None:
+                from .target_registry import same_document
+                if same_document(doc, active_uidoc.Document):
+                    return routes.make_response(data={
+                        "status": "error", "error_code": "active_document_close_unsupported",
+                        "error": "Active documents cannot be closed by the database API. "
+                                 "A posted Close command cannot retain the specified document identity.",
+                        "effects": "none"}, status=409)
+            closed = doc.Close(save)
+            return routes.make_response(data={
+                "status": "success" if closed else "error",
+                "message": "Document '{}' closed.".format(doc_title) if closed else "Revit refused to close the document.",
+                "document_title": doc_title, "saved": save if closed else False,
+                "effects": "committed" if closed else "none"}, status=200 if closed else 409)
 
         except Exception as e:
             logger.error("Failed to close document: {}".format(str(e)))

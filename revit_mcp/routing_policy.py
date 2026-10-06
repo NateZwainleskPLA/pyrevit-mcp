@@ -20,13 +20,18 @@ ROUTES = {
     "/color_splash/": (True, True, False),
     "/clear_colors/": (True, True, False),
     "/list_category_parameters/": (True, False, False),
-    "/close_document/": (True, True, True),
+    "/close_document/": (True, False, True),
     "/save_document/": (True, False, False),
     "/sync_with_central/": (True, False, False),
     "/operations/submit/": (True, False, False),
     "/operations/inspect/": (True, False, False),
     "/operations/cancel/": (True, False, False),
 }
+
+MUTATION_ROUTES = frozenset((
+    "/execute_code/", "/place_family/", "/color_splash/", "/clear_colors/",
+    "/open_document/", "/close_document/", "/save_document/", "/sync_with_central/",
+))
 
 
 class RoutingPolicyError(ValueError):

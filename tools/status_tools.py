@@ -9,13 +9,15 @@ def register_status_tools(mcp, revit_get):
     """Register status-related tools"""
 
     @mcp.tool()
-    async def get_revit_status(ctx: Context) -> str:
+    async def get_revit_status(target: str, ctx: Context) -> str:
         """Check if the Revit MCP API is active and responding"""
-        response = await revit_get("/status/", ctx, timeout=10.0)
+        response = await revit_get("/status/", ctx, timeout=10.0, target=target)
         return format_response(response)
 
     @mcp.tool()
-    async def get_revit_model_info(ctx: Context) -> str:
+    async def get_revit_model_info(target: str, document: str, ctx: Context) -> str:
         """Get comprehensive information about the current Revit model"""
-        response = await revit_get("/model_info/", ctx)
+        response = await revit_get(
+            "/model_info/", ctx, target=target, document=document
+        )
         return format_response(response)

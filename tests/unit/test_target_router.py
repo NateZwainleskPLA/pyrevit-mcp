@@ -59,7 +59,7 @@ async def test_invalid_handles_never_send_execution(target, document):
 
 
 async def test_get_conveys_full_identities_and_does_not_mutate_input():
-    request = AsyncMock()
+    request = AsyncMock(return_value=None)
     params = {"limit": 3}
     router = TargetRouter(Directory(), AsyncMock(), request)
     await router.call("GET", "/list_levels/", target="r1", document="d1", params=params)
@@ -84,3 +84,17 @@ async def test_reserved_identity_cannot_be_overridden():
         await router.call("POST", "/execute_code/", target="r1", document="d1", data={"instance_id": "other"})
     assert exc.value.code == "reserved_identity"
     router.request.assert_not_awaited()
+
+
+async def test_success_from_wrong_receiver_is_not_accepted_or_replayed():
+    from tools.revit_transport import RevitTransportResult
+    body = {"status": "success", "actual_target": {"instance_id": "other"}}
+    result = RevitTransportResult(method="POST", url="fixture", status_code=200,
+                                  json_received=True, body=body)
+    request = AsyncMock(return_value=result)
+    router = TargetRouter(Directory(), AsyncMock(), request)
+    rejected = await router.call("POST", "/execute_code/", target="r1", document="d1")
+    assert rejected.failure_kind == "invalid_identity_response"
+    assert rejected.body == body
+    assert rejected.mutation_outcome_unknown
+    request.assert_awaited_once()

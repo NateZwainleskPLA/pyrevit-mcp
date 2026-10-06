@@ -12,15 +12,20 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
 
     @mcp.tool()
     async def execute_revit_code(
-        code: str, description: str = "Code execution", ctx: Context = None,
-        transaction_mode: str = "script", script_name: str = "<revit-script>",
-        allow_ui_change: bool = False
+        target: str,
+        document: str,
+        code: str,
+        description: str = "Code execution",
+        ctx: Context = None,
+        transaction_mode: str = "script",
+        script_name: str = "<revit-script>",
+        allow_ui_change: bool = False,
     ) -> str:
         """
         Execute IronPython code directly in Revit context.
 
         The code has access to:
-        - doc: The active Revit document
+        - doc: The explicitly targeted Revit document
         - uidoc: Supplied UIDocument only with allow_ui_change=true and routing validation
         - DB: Revit API Database namespace
         - revit: pyRevit module
@@ -72,13 +77,19 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
                 payload["transaction_mode"] = transaction_mode
             if script_name != "<revit-script>":
                 payload["script_name"] = script_name
-            if allow_ui_change:
-                payload["allow_ui_change"] = True
 
             if ctx:
                 await ctx.info("Executing code: {}".format(description))
 
-            response = await revit_post("/execute_code/", payload, ctx, timeout=60.0)
+            response = await revit_post(
+                "/execute_code/",
+                payload,
+                ctx,
+                timeout=60.0,
+                target=target,
+                document=document,
+                allow_ui_change=allow_ui_change,
+            )
             return format_response(response)
 
         except (ConnectionError, ValueError, RuntimeError) as e:

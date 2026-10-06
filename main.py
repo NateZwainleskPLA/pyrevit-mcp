@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
+import json
 import anyio
 from mcp.server.fastmcp import FastMCP, Image, Context
 import base64
 from typing import Optional, Dict, Any, Union
 from tools.revit_transport import RevitTransportResult, request_revit
 from tools.utils import compatibility_response, format_response
+from tools.target_directory import TargetDirectory
+from tools.target_router import TargetRouter
+from tools.target_discovery import TargetDiscovery
+from revit_mcp.identity import IdentityError
+from revit_mcp.routing_policy import RoutingPolicyError
 
 # Create a generic MCP server for interacting with Revit
 # Use stateless_http=True and json_response=True for better compatibility
@@ -18,12 +24,9 @@ mcp = FastMCP(
     json_response=True
 )
 
-# Configuration
-# Revit runs on Windows; when it lives in a VM the routes server is not on the
-# host loopback, so allow overriding the target via the environment.
-REVIT_HOST = os.environ.get("REVIT_HOST", "127.0.0.1")
-REVIT_PORT = int(os.environ.get("REVIT_PORT", "48884"))
-BASE_URL = f"http://{REVIT_HOST}:{REVIT_PORT}/revit_mcp"
+target_directory = TargetDirectory(os.environ.get("REVIT_TARGET_STATE"))
+target_discovery = TargetDiscovery(target_directory)
+target_router = TargetRouter(target_directory, target_discovery.verified_handshake)
 
 
 async def revit_get(endpoint: str, ctx: Context = None, **kwargs) -> Union[Dict, str]:
@@ -36,29 +39,42 @@ async def revit_post(endpoint: str, data: Dict[str, Any], ctx: Context = None, *
     return compatibility_response(await _revit_call("POST", endpoint, data=data, ctx=ctx, **kwargs))
 
 
-async def revit_image(endpoint: str, ctx: Context = None) -> Union[Image, str]:
+async def revit_image(endpoint: str, ctx: Context = None, *, target: str,
+                      document: str):
     """GET request that returns an Image object"""
-    result = await _revit_call("GET", endpoint, ctx=ctx, timeout=60.0)
+    result = await _revit_call("GET", endpoint, ctx=ctx, timeout=60.0,
+                               target=target, document=document)
     if (result.failure_kind or not result.http_success or result.revit_error or
             not isinstance(result.body, dict) or "image_data" not in result.body):
         return format_response(result)
     try:
         image_bytes = base64.b64decode(result.body["image_data"], validate=True)
-        return Image(data=image_bytes, format="png")
+        metadata = {key: result.body[key] for key in ("actual_target",) if key in result.body}
+        return [Image(data=image_bytes, format="png"),
+                json.dumps(dict(metadata, target=target, document=document))]
     except (ValueError, TypeError) as e:
         return f"Error: Invalid image data: {str(e) or type(e).__name__}"
 
 
 async def _revit_call(method: str, endpoint: str, data: Dict = None, ctx: Context = None,
-                     timeout: float = 30.0, params: Dict = None) -> RevitTransportResult:
+                     timeout: float = 30.0, params: Dict = None, *, target: str,
+                     document: str = None, allow_ui_change: bool = False) -> RevitTransportResult:
     """Internal structured response; presentation belongs at the tool boundary."""
-    return await request_revit(method, f"{BASE_URL}{endpoint}", data=data,
-                               params=params, timeout=timeout)
+    try:
+        return await target_router.call(method, endpoint, target=target, document=document,
+                                        data=data, params=params, timeout=timeout,
+                                        allow_ui_change=allow_ui_change)
+    except (IdentityError, RoutingPolicyError) as error:
+        return RevitTransportResult(method=method, url="", json_received=True,
+                                    body={"status": "error", "error": str(error),
+                                          "error_code": error.code, "target": target,
+                                          "document": document, "effects": "none"})
 
 
 # Register all tools BEFORE the main block
 from tools import register_tools
-register_tools(mcp, revit_get, revit_post, revit_image)
+register_tools(mcp, revit_get, revit_post, revit_image,
+               target_directory=target_directory, target_discovery=target_discovery)
 
 
 async def run_combined_async():

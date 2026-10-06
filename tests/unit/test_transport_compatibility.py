@@ -2,6 +2,7 @@
 
 import base64
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -15,6 +16,16 @@ from tools.utils import compatibility_response, format_response
 
 @pytest.fixture
 def install_http(monkeypatch):
+    # These tests exercise transport/formatting; identity validation has its own
+    # real-directory and receiver tests. Supply an explicitly resolved target.
+    monkeypatch.setattr(main.target_router, "resolve", AsyncMock(return_value={
+        "endpoint": "http://fixture.invalid:49001/revit_mcp", "instance_id": "instance",
+        "runtime_id": "runtime", "document_id": "open-document"}))
+    async def transport_only(method, endpoint, **kwargs):
+        return await request_revit(method, "http://fixture.invalid:49001/revit_mcp" + endpoint,
+                                   data=kwargs.get("data"), params=kwargs.get("params"),
+                                   timeout=kwargs.get("timeout", 30.0))
+    monkeypatch.setattr(main.target_router, "call", transport_only)
     real_client = httpx.AsyncClient
 
     def install(handler):
@@ -39,8 +50,8 @@ async def test_main_keeps_full_internal_result_and_legacy_dictionary(install_htt
             "instance_id": "actual", "runtime_id": "generation", "document_id": "open-document"}
     requests = install_http(lambda request: httpx.Response(500, json=body,
                                                            headers={"X-Receiver": "actual"}))
-    result = await main._revit_call("POST", "/execute_code/", data={"code": "raise AssertionError"})
-    response = await main.revit_post("/execute_code/", {"code": "raise AssertionError"})
+    result = await main._revit_call("POST", "/execute_code/", data={"code": "raise AssertionError"}, target="r1", document="d1")
+    response = await main.revit_post("/execute_code/", {"code": "raise AssertionError"}, target="r1", document="d1")
     assert isinstance(result, RevitTransportResult)
     assert result.body == body and result.status_code == 500
     assert isinstance(response, dict) and response == body
@@ -58,7 +69,7 @@ async def test_non_200_receipts_reach_tools_without_invented_crash(status, insta
     body = {"state": "queued", "operation_id": "original", "effects": "none", "target": "actual"}
     requests = install_http(lambda request: httpx.Response(status, json=body))
     register_code_execution_tools(mock_mcp, main.revit_get, main.revit_post)
-    rendered = await mock_mcp.tools["execute_revit_code"]("print('one')")
+    rendered = await mock_mcp.tools["execute_revit_code"](code="print('one')", target="r1", document="d1")
     assert "HTTP {}".format(status) in rendered
     assert json.loads(rendered.split("\n", 1)[1]) == body
     assert "Unknown error occurred" not in rendered
@@ -68,7 +79,7 @@ async def test_non_200_receipts_reach_tools_without_invented_crash(status, insta
 async def test_legacy_success_output_stays_readable_and_metadata_available(install_http):
     body = {"status": "success", "output": "hello\n"}
     install_http(lambda request: httpx.Response(200, json=body))
-    response = await main.revit_post("/execute_code/", {"code": "print('hello')"})
+    response = await main.revit_post("/execute_code/", {"code": "print('hello')"}, target="r1", document="d1")
     assert format_response(response) == "hello\n"
     assert response.transport_result.body == body
 
@@ -82,7 +93,7 @@ async def test_success_preserves_actual_target_aliases_and_effects(value_field, 
                 "operation_id": "original"}
     body = {"status": "success", value_field: "done", **metadata}
     install_http(lambda request: httpx.Response(200, json=body))
-    response = await main.revit_post("/execute_code/", {})
+    response = await main.revit_post("/execute_code/", {}, target="r1", document="d1")
     rendered = format_response(response)
     assert rendered.startswith("done\n\n=== RESPONSE METADATA ===\n")
     assert json.loads(rendered.split("=== RESPONSE METADATA ===\n", 1)[1]) == metadata
@@ -99,7 +110,7 @@ async def test_legacy_text_failure_exposes_structured_cause(exc_type, expected, 
         raise exc_type("controlled", request=request)
 
     requests = install_http(handler)
-    response = await main.revit_post("/execute_code/", {"operation_id": "original"})
+    response = await main.revit_post("/execute_code/", {"operation_id": "original"}, target="r1", document="d1")
     assert isinstance(response, str) and expected in response
     assert response.transport_result.exception_type == exc_type.__name__
     assert response.transport_result.mutation_outcome_unknown == unknown
@@ -109,7 +120,7 @@ async def test_legacy_text_failure_exposes_structured_cause(exc_type, expected, 
 
 async def test_malformed_response_is_not_a_revit_exception(install_http):
     install_http(lambda request: httpx.Response(500, text="gateway failure"))
-    response = await main.revit_post("/execute_code/", {})
+    response = await main.revit_post("/execute_code/", {}, target="r1", document="d1")
     assert "malformed or non-JSON" in response
     assert "HTTP 500" in response and "gateway failure" in response
     assert response.transport_result.failure_kind == "invalid_json"
@@ -120,7 +131,7 @@ async def test_malformed_response_is_not_a_revit_exception(install_http):
 @pytest.mark.parametrize("body", [None, ["receipt", 2], False, "Unicode: \u753b\u50cf"])
 async def test_non_object_json_compatibility_retains_original(body, install_http):
     install_http(lambda request: httpx.Response(200, content=json.dumps(body)))
-    response = await main.revit_get("/status/")
+    response = await main.revit_get("/status/", target="r1")
     assert json.loads(response) == body
     assert response.transport_result.body == body
     assert response.transport_result.json_received
@@ -128,7 +139,7 @@ async def test_non_object_json_compatibility_retains_original(body, install_http
 
 async def test_get_passes_query_and_timeout_through_actual_client(install_http):
     requests = install_http(lambda request: httpx.Response(200, json={"status": "success"}))
-    await main.revit_get("/status/", params={"operation_id": "original"}, timeout=7.0)
+    await main.revit_get("/status/", params={"operation_id": "original"}, timeout=7.0, target="r1")
     assert requests[0].url.params["operation_id"] == "original"
     assert requests[0].extensions["timeout"] == {"connect": 7.0, "read": 7.0, "write": 7.0, "pool": 7.0}
 
@@ -137,22 +148,23 @@ async def test_image_uses_same_transport_and_decodes_valid_payload(install_http)
     data = b"fixture-png-bytes"
     requests = install_http(lambda request: httpx.Response(200, json={
         "image_data": base64.b64encode(data).decode("ascii")}))
-    response = await main.revit_image("/export_image/")
-    assert isinstance(response, Image) and response.data == data
+    response = await main.revit_image("/get_view/fixture", target="r1", document="d1")
+    assert isinstance(response[0], Image) and response[0].data == data
+    assert json.loads(response[1]) == {"target": "r1", "document": "d1"}
     assert requests[0].extensions["timeout"]["read"] == 60.0
 
 
 async def test_image_revit_error_retains_diagnostics(install_http):
     install_http(lambda request: httpx.Response(500, json={
         "status": "error", "error": "export failed", "traceback": "export.py:4", "instance_id": "actual"}))
-    response = await main.revit_image("/export_image/")
+    response = await main.revit_image("/get_view/fixture", target="r1", document="d1")
     assert "HTTP 500" in response and "export failed" in response
     assert "export.py:4" in response and "actual" in response
 
 
 async def test_image_rejects_invalid_base64(install_http):
     install_http(lambda request: httpx.Response(200, json={"image_data": "***"}))
-    assert "Invalid image data" in await main.revit_image("/export_image/")
+    assert "Invalid image data" in await main.revit_image("/get_view/fixture", target="r1", document="d1")
 
 
 async def test_transport_formatting_does_not_mutate_body():
@@ -165,3 +177,12 @@ async def test_transport_formatting_does_not_mutate_body():
     assert "=== ERROR DETAILS ===" not in format_response(result)
     assert result.body == response == body
     assert "status_code" not in response and "transport_result" not in response
+
+
+async def test_local_target_rejection_has_no_fabricated_http_status():
+    result = RevitTransportResult(method="POST", url="", json_received=True,
+                                  body={"status": "error", "error_code": "unknown_target",
+                                        "error": "Unknown handle", "effects": "none"})
+    rendered = format_response(compatibility_response(result))
+    assert "Unknown handle" in rendered
+    assert "HTTP" not in rendered

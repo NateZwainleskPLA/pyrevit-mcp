@@ -11,6 +11,8 @@ def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
 
     @mcp.tool()
     async def color_splash(
+        target: str,
+        document: str,
         category_name: str,
         parameter_name: str,
         use_gradient: bool = False,
@@ -50,7 +52,14 @@ def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
                         category_name, parameter_name
                     )
                 )
-            response = await revit_post("/color_splash/", data, ctx, timeout=60.0)
+            response = await revit_post(
+                "/color_splash/",
+                data,
+                ctx,
+                timeout=60.0,
+                target=target,
+                document=document,
+            )
             return format_response(response)
 
         except Exception as e:
@@ -60,7 +69,9 @@ def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
             return error_msg
 
     @mcp.tool()
-    async def clear_colors(category_name: str, ctx: Context = None) -> str:
+    async def clear_colors(
+        target: str, document: str, category_name: str, ctx: Context = None
+    ) -> str:
         """
         Clear color overrides for elements in a category
 
@@ -78,8 +89,12 @@ def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
             data = {"category_name": category_name}
 
             if ctx:
-                await ctx.info("Clearing color overrides for {} elements".format(category_name))
-            response = await revit_post("/clear_colors/", data, ctx)
+                await ctx.info(
+                    "Clearing color overrides for {} elements".format(category_name)
+                )
+            response = await revit_post(
+                "/clear_colors/", data, ctx, target=target, document=document
+            )
             return format_response(response)
 
         except Exception as e:
@@ -89,7 +104,9 @@ def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
             return error_msg
 
     @mcp.tool()
-    async def list_category_parameters(category_name: str, ctx: Context = None) -> str:
+    async def list_category_parameters(
+        target: str, document: str, category_name: str, ctx: Context = None
+    ) -> str:
         """
         Get available parameters for elements in a category
 
@@ -110,7 +127,13 @@ def register_colors_tools(mcp, revit_get, revit_post, revit_image=None):
                 await ctx.info(
                     "Getting available parameters for {} category".format(category_name)
                 )
-            response = await revit_post("/list_category_parameters/", data, ctx)
+            response = await revit_post(
+                "/list_category_parameters/",
+                data,
+                ctx,
+                target=target,
+                document=document,
+            )
             return format_response(response)
 
         except Exception as e:

@@ -1,5 +1,6 @@
 """Per-call routing over the identity directory and single-attempt transport."""
 import anyio
+from dataclasses import replace
 
 from revit_mcp.routing_policy import RoutingPolicyError, route_policy
 from .revit_transport import request_revit
@@ -43,7 +44,16 @@ class TargetRouter:
         if method.upper() == "GET":
             query = dict(params or {})
             query.update(identities, allow_ui_change="true" if allow_ui_change else "false")
-            return await self.request(method, url, params=query, timeout=timeout)
-        payload = dict(data or {})
-        payload.update(identities, allow_ui_change=allow_ui_change)
-        return await self.request(method, url, data=payload, params=params, timeout=timeout)
+            result = await self.request(method, url, params=query, timeout=timeout)
+        else:
+            payload = dict(data or {})
+            payload.update(identities, allow_ui_change=allow_ui_change)
+            result = await self.request(method, url, data=payload, params=params, timeout=timeout)
+        if result is not None and result.http_success and not result.revit_error:
+            body = result.body if isinstance(result.body, dict) else {}
+            actual = body.get("actual_target", body)
+            if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in identities.items()):
+                return replace(result, failure_kind="invalid_identity_response",
+                               error="Successful response did not confirm the addressed target/document",
+                               mutation_outcome_unknown=method.upper() == "POST")
+        return result
