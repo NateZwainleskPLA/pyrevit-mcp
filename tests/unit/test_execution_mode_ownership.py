@@ -1,4 +1,6 @@
 import threading
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,6 +9,7 @@ from revit_mcp.routing_policy import ROUTES
 from revit_mcp import execution_runtime as module
 from tests.unit.test_execution_identity_integration import setup
 from tests.unit.test_operation_runtime import Event
+from tests.unit.test_startup_private_owner import startup_host, load_startup
 
 
 def exclusion_receipt():
@@ -19,6 +22,9 @@ def exclusion_receipt():
 def configured(monkeypatch):
     import revit_mcp.target_routing as routing
     owner = dict(lock=threading.RLock(), safety=ExecutionSafety(), runtime=None)
+    slots = {routing.PRIVATE_OWNER_SLOT: owner, routing.SAFETY_SLOT: owner["safety"]}
+    domain = SimpleNamespace(GetData=slots.get, SetData=slots.__setitem__)
+    monkeypatch.setitem(sys.modules, "System", SimpleNamespace(AppDomain=SimpleNamespace(CurrentDomain=domain)))
     monkeypatch.setattr(module, "get_process_owner_state", lambda: owner)
     monkeypatch.setattr(routing, "get_process_safety", lambda: owner["safety"])
     def create(engine):
@@ -52,7 +58,7 @@ def test_one_process_lane_until_safe_disposal_even_across_generation(monkeypatch
                  experimental=True, exclusive=True, exclusion_receipt=exclusion_receipt())
     assert engine.adapter.safety is owner["safety"]
     _, second_adapter, second_reg, second_uiapp, _, _, _ = setup()
-    with pytest.raises(RuntimeError, match="Another private lane"):
+    with pytest.raises(RuntimeError, match="private execution lane owns"):
         module.build_runtime_in_api_context(second_reg, second_uiapp, second_adapter.execute_payload,
             experimental=True, exclusive=True, exclusion_receipt=exclusion_receipt())
     engine.submit(value)
@@ -95,3 +101,40 @@ def test_cannot_supply_independent_safety_map(monkeypatch):
     with pytest.raises(ValueError, match="shared process"):
         module.build_runtime_in_api_context(reg, uiapp, adapter.execute_payload,
             experimental=True, exclusive=True, owner_state=other, exclusion_receipt=exclusion_receipt())
+
+
+def test_factory_consumes_actual_guarded_startup_receipt_and_blocks_later_reload(startup_host, monkeypatch):
+    slots, domain, api, initialize, events = startup_host
+    loaded = load_startup()
+    receipt = loaded["register_routes"](legacy_api_enabled=False)
+    assert receipt["private_runtime_reload_guard"] is True
+    _, adapter, reg, uiapp, _, _, _ = setup()
+    monkeypatch.setattr(module, "_create_external_event", lambda engine: engine.bind_event(Event()))
+    engine = module.build_runtime_in_api_context(reg, uiapp, adapter.execute_payload,
+                  experimental=True, exclusive=True, exclusion_receipt=receipt)
+    assert engine.enabled and engine.adapter.safety is slots["revit_mcp.routing.safety.v1"]
+    assert slots[module.OWNER_SLOT]["runtime"] is engine
+    prior_calls, prior_handlers = initialize.call_count, dict(api.handlers)
+    with pytest.raises(RuntimeError, match="private execution lane owns"):
+        loaded["register_routes"]()
+    assert initialize.call_count == prior_calls and api.handlers == prior_handlers
+    engine.stop()
+    engine.dispose_in_api_context()
+    assert slots[module.OWNER_SLOT]["runtime"] is None
+
+
+def test_partial_event_creation_keeps_lease_until_unbound_event_disposal(monkeypatch):
+    owner = configured(monkeypatch)
+    _, adapter, reg, uiapp, _, _, _ = setup()
+    event = Event()
+    def fail_binding(engine):
+        engine._unbound_event = event
+        raise RuntimeError("binding failed after creation")
+    monkeypatch.setattr(module, "_create_external_event", fail_binding)
+    with pytest.raises(RuntimeError, match="binding failed"):
+        module.build_runtime_in_api_context(reg, uiapp, adapter.execute_payload,
+                    experimental=True, exclusive=True, exclusion_receipt=exclusion_receipt())
+    retained = owner["runtime"]
+    assert retained is not None and retained.stopping
+    retained.dispose_in_api_context()
+    assert event.disposed and owner["runtime"] is None

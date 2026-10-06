@@ -73,8 +73,11 @@ Reload must not re-enable synchronous handlers while a retained private lease
 exists. The routing startup owner must check the retained owner slot before
 legacy registration; unreadable ownership must fail closed. A stopping or
 pending runtime continues owning the host until safe disposal succeeds.
-Until the routing owner publishes the reload-guard receipt marker, this
-factory refuses native activation even with the earlier exclusion receipt.
+Routing's completed `9558164c` startup guard and `04587804` receipt follow-up
+are integrated. The factory primes retained ownership and holds the actual
+`startup_owner_guard()` through private construction, and requires the receipt
+marker. Tests consume the actual guarded startup receipt, create an inert event,
+and verify subsequent synchronous reload fails before identity/route changes.
 
 Stream capture has a trusted configurable retained-character limit during
 execution. Receipt truncation preserves structured errors, script location,
@@ -135,6 +138,7 @@ cancellation, `0f6e34e` journaling. Dependency equivalents imported here:
 | Execution `ae58f06d`, `5831b986`, `2d161784`, `7d63c3b7` | `9645189`, `e5276e7`, `5d97be2`, `d06feea` |
 | Routing policy `7a4aaf6`, router `40838db` | `6fe9a01`, `3e973ba` (policy introduced here during dependency-order resolution) |
 | Routing cutover `3a26b329`, recovery `f6781d78`, confirmation `25db62f9` | `1d6689b`, `aa778cc`, `c342504` |
+| Routing startup guard `9558164c`, marker `04587804` | `e0ef77a`, `216e6e1` |
 
 Verification uses the repository's unit suite only, CPython compile checks,
 and Python 2.7 AST parsing of the three native operation modules. The actual
@@ -144,9 +148,9 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
 
 - Completed identity, routing, transport and execution-foundation commits are
   integrated; tests exercise their real modules with inert Revit doubles.
-- Routing startup reload-guard marker is a remaining composition prerequisite;
-  earlier receipts cannot activate this factory. No repeated polling is needed:
-  import the completed owner follow-up when it is published.
+- Startup/private-lease composition and the exclusion receipt are integrated;
+  native cross-engine retained-object behavior and accepted-worker draining
+  remain unproven. There is no automatic/default private-mode registration.
 - Demonstrate request-only legacy exclusion, accepted-worker draining and the
   one-owner lease in a fresh disposable native initialization. Do not switch an
   already-serving host by calling register_routes again: queued legacy workers

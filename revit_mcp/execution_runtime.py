@@ -168,7 +168,11 @@ class ExecutionRuntime(object):
             if self.event is not None:
                 self.event.Dispose()
                 self.event = None
-                self._handler = None
+            unbound = getattr(self, "_unbound_event", None)
+            if unbound is not None:
+                unbound.Dispose()
+                self._unbound_event = None
+            self._handler = None
             owner_state = getattr(self, "owner_state", None)
             if owner_state is not None:
                 with owner_state["lock"]:
@@ -189,7 +193,14 @@ def _create_external_event(runtime):
 
     handler = Handler()
     event = ExternalEvent.Create(handler)
-    runtime.bind_event(event)
+    try:
+        runtime.bind_event(event)
+    except BaseException:
+        # Retain a created event even when binding fails: disposal/lease release
+        # cannot claim success while an owned native callback remains alive.
+        runtime._unbound_event = event
+        runtime._handler = handler
+        raise
     runtime._handler = handler
     return runtime
 
@@ -317,7 +328,7 @@ class NativeExecutionAdapter(object):
                                         uidoc.Document if uidoc is not None else None)
 
 
-def build_runtime_in_api_context(registry, uiapp, execute_payload, store=None,
+def _build_runtime_in_api_context(registry, uiapp, execute_payload, store=None,
                                  experimental=False, exclusive=False, owner_state=None,
                                  output_limit_chars=1000000, exclusion_receipt=None):
     """Construct the adapter without installing routes or modifying startup.
@@ -371,12 +382,41 @@ def build_runtime_in_api_context(registry, uiapp, execute_payload, store=None,
                 _create_external_event(runtime)
             except BaseException:
                 # Retain a lease if partial event creation cannot be safely disposed.
-                if runtime.event is None:
+                if runtime.event is None and getattr(runtime, "_unbound_event", None) is None:
                     owner_state["runtime"] = None
                 else:
                     runtime.stop()
                 raise
     return runtime
+
+
+def build_runtime_in_api_context(registry, uiapp, execute_payload, store=None,
+                                 experimental=False, exclusive=False, owner_state=None,
+                                 output_limit_chars=1000000, exclusion_receipt=None):
+    """Use routing's real startup guard for the complete private-lane construction.
+
+    Prime retained ownership before taking the guard, so an initially absent
+    slot cannot bypass its serialization. Both the complete exclusion receipt
+    marker and completed routing guard are required. Request-only exclusions must be established in a
+    fresh initialization; never switch an already-serving listener here.
+    """
+    if experimental and exclusive:
+        # Validate composition evidence before allocating native retained state.
+        from .routing_policy import ROUTES
+        required = set(path for path in ROUTES if not path.startswith("/operations/"))
+        required.discard("/get_view/")
+        required.update(("/get_view/<view_name>", "/metadata/refresh/"))
+        if (not exclusion_receipt or exclusion_receipt.get("legacy_api_excluded") is not True or
+                exclusion_receipt.get("private_runtime_reload_guard") is not True or
+                required - set(exclusion_receipt.get("excluded_routes", []))):
+            raise ValueError("Enabled private lane requires complete request-only legacy exclusion and reload guard receipt")
+        from .target_routing import startup_owner_guard
+        get_process_owner_state()
+        with startup_owner_guard():
+            return _build_runtime_in_api_context(registry, uiapp, execute_payload, store,
+                experimental, exclusive, owner_state, output_limit_chars, exclusion_receipt)
+    return _build_runtime_in_api_context(registry, uiapp, execute_payload, store,
+        experimental, exclusive, owner_state, output_limit_chars, exclusion_receipt)
 
 
 OWNER_SLOT = "revit_mcp.execution.owner.v1"
