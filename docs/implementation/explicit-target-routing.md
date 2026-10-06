@@ -74,6 +74,16 @@ metadata. It does not register or enable a private execution lane. The default
 startup composition remains synchronous. Experimental adoption requires the
 operations owner's retained exclusive lease and native acceptance separately.
 
+Before initializing identity, startup reads the operations-owned CLR AppDomain
+slot `revit_mcp.execution.owner.v1`. Any retained `runtime` lease rejects startup,
+including stopping/pending runtimes; routing never clears that lease or guesses
+whether disposal completed. Corrupt/unreadable owner state, a mismatched retained
+safety guard, or a busy/unreadable owner lock also rejects startup. For an existing
+idle owner, startup holds its lock through registration. An absent owner or a
+safely released lease permits default synchronous startup. This check imports no
+operations module, allocates no competing owner, and preserves blocked safety
+state. Native retention across engines remains unproven without fixture testing.
+
 Validation and pending coverage
 -------------------------------
 

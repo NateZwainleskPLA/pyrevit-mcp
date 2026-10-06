@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Validate synchronous Routes calls in API context, before handler execution."""
 import json
+from contextlib import contextmanager
 
 from .identity import IdentityError, string_types
 from .routing_policy import MUTATION_ROUTES, RoutingPolicyError, check_ui_policy, route_policy
@@ -8,6 +9,48 @@ from .target_registry import get_registry, same_document
 from .execution_safety import ExecutionSafety, MutationBlockedError
 
 SAFETY_SLOT = "revit_mcp.routing.safety.v1"
+PRIVATE_OWNER_SLOT = "revit_mcp.execution.owner.v1"
+
+
+@contextmanager
+def startup_owner_guard():
+    """Reject startup while a retained private lane owns this process.
+
+    Do not initialize identity, clear leases or replace unreadable retained state.
+    An existing idle owner's lock stays held through registration, preventing its
+    factory from acquiring a private lease halfway through synchronous startup.
+    Native initialization remains an API-context composition operation.
+    """
+    try:
+        from System import AppDomain
+        domain = AppDomain.CurrentDomain
+        owner = domain.GetData(PRIVATE_OWNER_SLOT)
+    except Exception as error:
+        raise RuntimeError("Retained private execution owner is unreadable: " + str(error))
+    if owner is None:
+        yield
+        return
+    if not isinstance(owner, dict) or any(key not in owner for key in ("lock", "runtime", "safety")):
+        raise RuntimeError("Retained private execution owner is corrupt; startup is blocked")
+    lock = owner["lock"]
+    if not callable(getattr(lock, "acquire", None)) or not callable(getattr(lock, "release", None)):
+        raise RuntimeError("Retained private execution owner lock is unavailable; startup is blocked")
+    try:
+        acquired = lock.acquire(False)
+    except Exception as error:
+        raise RuntimeError("Retained private execution owner lock is unreadable: " + str(error))
+    if not acquired:
+        raise RuntimeError("Retained private execution owner is busy; startup is blocked")
+    try:
+        if owner["safety"] is None or owner["safety"] is not domain.GetData(SAFETY_SLOT):
+            raise RuntimeError("Retained private execution owner has a different safety guard; startup is blocked")
+        if not all(callable(getattr(owner["safety"], name, None)) for name in ("require_safe", "observe", "snapshot")):
+            raise RuntimeError("Retained private execution safety guard is corrupt; startup is blocked")
+        if owner["runtime"] is not None:
+            raise RuntimeError("A retained private execution lane owns this process; stop and safely release its lease before startup")
+        yield
+    finally:
+        lock.release()
 
 
 def get_process_safety():
