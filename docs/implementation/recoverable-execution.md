@@ -14,7 +14,7 @@ only the second may resolve live document objects. An adapter must revalidate
 the full identities and a still-valid document immediately before execution.
 No alternative identity schema is defined here.
 
-The runner's `execute(payload, context)` adapter returns
+The runner's `execute(payload, context, cancellation_check)` adapter returns
 `{state, effects, result, unsafe?, cleanup_errors?}`. Pending transactions and
 cleanup errors cannot publish success or rollback. Adapter failure after entry
 conservatively records unknown effects and quarantines the host. No scanning
@@ -43,6 +43,16 @@ operation queued; retrying its original ID/payload can retry the wakeup without
 re-admitting it. Diagnostic history is bounded. `stop()` expires the generation
 and clears queued payloads without replay; `dispose_in_api_context()` refuses
 active/pending callbacks. A pending callback must drain before disposal.
+
+Stage 2 adds POST `/operations/cancel/`, `cancel_revit_operation`, atomic queued
+removal and a primitive running cancellation flag. The zero-argument
+`cancellation_check()` is passed to the execution-foundations adapter. Running
+work remains running until a checkpoint observes the flag; it may still succeed
+if it never checkpoints. Effects are independent: cancellation after a prior
+commit does not erase that commit. `store.interaction(id, active, description)`
+is reserved for an adapter with evidence of an active native interaction; elapsed
+time does not imply waiting for a dialog. Nothing forcibly interrupts Python,
+closes dialogs or picks, or rolls back another command's transactions.
 
 Outstanding integration/native checks
 -------------------------------------

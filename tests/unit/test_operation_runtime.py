@@ -12,7 +12,7 @@ from revit_mcp.execution_routes import register_execution_routes
 
 def payload(operation_id="one", **changes):
     value = dict(operation_id=operation_id, target="r17", document="d4", code="pass",
-                 transaction_mode="script", description="trial", allow_ui_change=False)
+                 runtime_id="generation", transaction_mode="script", description="trial", allow_ui_change=False)
     value.update(changes)
     return value
 
@@ -33,7 +33,8 @@ class Event:
 def runtime(execute=None, **options):
     store = options.pop("store", OperationStore("generation"))
     engine = ExecutionRuntime(store, lambda p: None, lambda p, a: object(),
-                              execute or (lambda p, c: dict(state="succeeded", effects="none", result={})),
+                              (lambda p, c, check: execute(p, c)) if execute else
+                              (lambda p, c, check: dict(state="succeeded", effects="none", result={})),
                               experimental=True, exclusive=True, **options)
     engine.bind_event(Event())
     return engine

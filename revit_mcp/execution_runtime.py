@@ -11,7 +11,8 @@ class ExecutionRuntime(object):
     validate_cached(payload) MUST use primitive snapshots only.
     validate_api(payload, uiapp) MUST revalidate the full identity and resolve a
     still-valid document wrapper immediately before work. execute receives that
-    resolved context and returns state/effects/result plus optional unsafe=True.
+    resolved context plus a cancellation_check() callback, and returns
+    state/effects/result plus optional unsafe=True.
     The exclusive gate is an integration assertion: it must exclude ALL legacy
     API-context handlers, not just the old script route.
     """
@@ -86,8 +87,12 @@ class ExecutionRuntime(object):
             context = self.validate_api(payload, uiapp)
             if self.quarantined:
                 raise OperationError("host_quarantined", "Host needs targeted recovery", 503)
-            entered = True
-            outcome = self.execute(payload, context)
+            if self.store.cancellation_requested(operation_id):
+                outcome = {"state": "canceled", "effects": "none", "result": {}}
+            else:
+                entered = True
+                outcome = self.execute(payload, context,
+                                       lambda: self.store.cancellation_requested(operation_id))
             if outcome.get("unsafe") or outcome.get("cleanup_errors"):
                 self.quarantined = True
                 outcome["state"], outcome["effects"] = "failed", "unknown"

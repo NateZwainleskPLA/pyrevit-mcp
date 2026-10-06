@@ -84,7 +84,7 @@ class OperationStore(object):
                        "payload_hash": digest, "state": "queued", "effects": "none",
                        "admitted_at": self.clock(), "durability": "memory"}
             # Preserve the routing owner's full identity envelope verbatim.
-            for key in ("target", "document", "identity"):
+            for key in ("target", "document", "identity", "instance_id", "document_id"):
                 if key in payload:
                     receipt[key] = primitive_copy(payload[key])
             self.records[operation_id] = {"payload": payload, "receipt": receipt}
@@ -118,12 +118,42 @@ class OperationStore(object):
             result = {"receipt_truncated": True, "preview": encoded[:self.max_receipt_bytes // 6]}
         with self.lock:
             record = self.records[operation_id]
-            if record["receipt"]["state"] != "running":
+            if record["receipt"]["state"] not in ("running", "waiting_for_user"):
                 raise OperationError("invalid_transition", "Only running operations can complete")
             record["receipt"].update(state=state, effects=effects, result=result,
                                       completed_at=self.clock())
             record["payload"] = None
             return copy.deepcopy(record["receipt"])
+
+    def cancel(self, operation_id):
+        """Queued removal is atomic with take_next; running work only gets a flag."""
+        with self.lock:
+            self._ensure_live()
+            if operation_id not in self.records:
+                raise OperationError("operation_not_found", "Operation not retained", 404)
+            record = self.records[operation_id]
+            receipt = record["receipt"]
+            if receipt["state"] in TERMINAL:
+                return copy.deepcopy(receipt)
+            receipt["cancellation_requested"] = True
+            if receipt["state"] == "queued":
+                self.queue.remove(operation_id)
+                receipt.update(state="canceled", effects="none", completed_at=self.clock())
+                record["payload"] = None
+            return copy.deepcopy(receipt)
+
+    def cancellation_requested(self, operation_id):
+        with self.lock:
+            return self.expired or self.records[operation_id]["receipt"].get("cancellation_requested", False)
+
+    def interaction(self, operation_id, active, description=None):
+        """Only an adapter knowing a native interaction is active may call this."""
+        with self.lock:
+            receipt = self.records[operation_id]["receipt"]
+            if receipt["state"] not in ("running", "waiting_for_user"):
+                raise OperationError("invalid_transition", "Interaction requires running work")
+            receipt["state"] = "waiting_for_user" if active else "running"
+            receipt["interaction"] = str(description or "Known native interaction")[:1024] if active else None
 
     def has_queued(self):
         with self.lock:

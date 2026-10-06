@@ -23,9 +23,11 @@ def register_execution_routes(api, runtime, make_response=None):
             runtime.validate_cached(data)
             receipt = runtime.store.inspect(data["operation_id"])
             # Inspection cannot read an operation using another target/document.
-            for key in ("target", "document", "identity"):
+            for key in ("target", "document", "identity", "instance_id", "runtime_id", "document_id"):
                 if receipt.get(key) != data.get(key):
                     raise OperationError("operation_target_mismatch", "Operation target does not match")
+            if action == "cancel":
+                receipt = runtime.store.cancel(data["operation_id"])
             return make_response(data=receipt, status=200)
         except OperationError as error:
             return make_response(data={"error": str(error), "error_code": error.code}, status=error.status)
@@ -39,5 +41,9 @@ def register_execution_routes(api, runtime, make_response=None):
     @api.route("/operations/inspect/", methods=["POST"])
     def inspect(request):
         return respond("inspect", request)
+
+    @api.route("/operations/cancel/", methods=["POST"])
+    def cancel(request):
+        return respond("cancel", request)
 
     return respond

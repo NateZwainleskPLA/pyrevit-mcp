@@ -8,8 +8,9 @@ def register_execution_tools(mcp, router):
         if not target or not document or not operation_id:
             raise ValueError("target, document and stable operation_id are required")
         result = await router.call("POST", endpoint, target=target, document=document,
-                                   data=dict(data, operation_id=operation_id,
-                                             target=target, document=document),
+                                   data=dict((key, value) for key, value in
+                                             dict(data, operation_id=operation_id).items()
+                                             if key != "allow_ui_change"),
                                    timeout=10.0,
                                    allow_ui_change=data.get("allow_ui_change", False))
         # Preserve the body and delivery classification. Never automatically retry.
@@ -38,3 +39,9 @@ def register_execution_tools(mcp, router):
                                   ctx: Context = None) -> dict:
         """Inspect retained primitive receipts without waiting for Revit UI."""
         return await call("/operations/inspect/", target, document, operation_id, {}, ctx)
+
+    @mcp.tool()
+    async def cancel_revit_operation(target: str, document: str, operation_id: str,
+                                     ctx: Context = None) -> dict:
+        """Cancel queued work or request a checkpoint; cannot force native dialogs."""
+        return await call("/operations/cancel/", target, document, operation_id, {}, ctx)
