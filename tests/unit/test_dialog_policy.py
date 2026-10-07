@@ -292,6 +292,7 @@ def test_receipt_clock_failure_does_not_escape_native_callback():
     sub.start()
     host.fire(Event())
     assert sub.snapshot()["dropped_receipts"] == 1
+    assert sub.current_sequence() == 1
 
 
 def test_diagnostics_expose_policy_opt_in_and_selections_without_events():
@@ -364,3 +365,164 @@ def test_attachment_failure_is_visible_and_retains_removable_state():
     assert len(host.handlers) == 1
     remove_subscription(state)
     assert not state
+
+
+def test_policy_swaps_keep_delegate_and_all_receipt_ordinals():
+    host = Host()
+    sub = subscribe(host)
+    delegate = host.handlers[0]
+    idle = sub._policy
+    selected = policy()
+    assert sub.current_sequence() == 0
+    host.fire(Event())
+    assert sub.set_policy(selected, "caller-supplied-scope") is idle
+    host.fire(Event())
+    assert sub.set_policy(idle) is selected
+    host.fire(Event())
+    assert host.add_count == 1
+    assert host.handlers == [delegate]
+    snapshot = sub.snapshot()
+    receipts = snapshot["receipts"]
+    assert [r["sequence"] for r in receipts] == [1, 2, 3]
+    assert [r["policy_generation"] for r in receipts] == [0, 1, 2]
+    assert [r["scope_token"] for r in receipts] == [None, "caller-supplied-scope", None]
+    assert [r["reason"] for r in receipts] == ["policy_disabled", "override_accepted", "policy_disabled"]
+    assert sub.current_sequence() == snapshot["current_sequence"] == 3
+    json.dumps(snapshot)
+
+
+def test_scoped_policy_restores_prior_policy_and_token_on_exception():
+    host = Host()
+    sub = subscribe(host)
+    original = policy(enabled=False)
+    sub.set_policy(original, "outer-token")
+    with pytest.raises(RuntimeError, match="script failed"):
+        with sub.scoped_policy(policy(), "active-token") as active:
+            assert active is sub
+            host.fire(Event())
+            raise RuntimeError("script failed")
+    assert sub.snapshot()["policy"] == original.snapshot()
+    assert sub.snapshot()["scope_token"] == "outer-token"
+    assert sub.snapshot()["policy_generation"] == 3
+    host.fire(Event())
+    assert sub.snapshot()["receipts"][-1]["reason"] == "policy_disabled"
+    assert host.add_count == 1
+    assert len(host.handlers) == 1
+
+
+def test_nested_scopes_restore_in_order_without_resetting_sequence():
+    host = Host()
+    sub = subscribe(host)
+    with sub.scoped_policy(policy(), "outer"):
+        host.fire(Event())
+        with sub.scoped_policy(DialogPolicy(), "inner"):
+            host.fire(Event())
+        host.fire(Event())
+    host.fire(Event())
+    receipts = sub.snapshot()["receipts"]
+    assert [r["sequence"] for r in receipts] == [1, 2, 3, 4]
+    assert [r["policy_generation"] for r in receipts] == [1, 2, 3, 4]
+    assert [r["scope_token"] for r in receipts] == ["outer", "inner", "outer", None]
+    assert [r["override_attempted"] for r in receipts] == [True, False, True, False]
+
+
+@pytest.mark.parametrize("invalid", [None, object(), {}, "policy"])
+def test_swap_rejects_non_policy_without_changing_state(invalid):
+    host = Host()
+    sub = subscribe(host)
+    before = sub.snapshot()
+    with pytest.raises(ValueError, match="DialogPolicy"):
+        sub.set_policy(invalid)
+    with pytest.raises(ValueError, match="DialogPolicy"):
+        with sub.scoped_policy(invalid):
+            pytest.fail("invalid scope entered")
+    assert sub.snapshot() == before
+    assert host.add_count == 1
+
+
+@pytest.mark.parametrize("invalid", [object(), {}, 1, True, ""])
+def test_scope_token_rejects_wrappers_and_non_string_data(invalid):
+    host = Host()
+    sub = subscribe(host)
+    before = sub.snapshot()
+    with pytest.raises(ValueError, match="scope_token"):
+        sub.set_policy(policy(), invalid)
+    assert sub.snapshot() == before
+
+
+@pytest.mark.parametrize("state", ["not_started", "closed", "detach_failed"])
+def test_swapping_never_reactivates_an_inactive_or_closed_subscription(state):
+    host = Host()
+    sub = DialogSubscription(DialogPolicy(), BUILD, host.attach, host.detach, lambda f: f)
+    if state != "not_started":
+        sub.start()
+        if state == "detach_failed":
+            host.detach_error = RuntimeError("cannot detach")
+            with pytest.raises(RuntimeError):
+                sub.close()
+        else:
+            sub.close()
+    lifecycle_before = (sub.snapshot()["attached"], sub.snapshot()["active"], host.add_count)
+    sub.set_policy(policy(), "inactive-scope")
+    event = Event()
+    sub._handler(host, event)  # also checks a stale delegate after detach
+    assert event.calls == []
+    assert sub.snapshot()["receipts"][-1]["reason"] == "subscription_inactive"
+    assert lifecycle_before == (sub.snapshot()["attached"], sub.snapshot()["active"], host.add_count)
+
+
+def test_scope_restoration_after_close_does_not_mask_error_or_reactivate():
+    host = Host()
+    sub = subscribe(host)
+    with pytest.raises(RuntimeError, match="script failed"):
+        with sub.scoped_policy(policy(), "operation"):
+            sub.close()
+            raise RuntimeError("script failed")
+    snapshot = sub.snapshot()
+    assert snapshot["policy"]["enabled"] is False
+    assert snapshot["policy_generation"] == 2
+    assert snapshot["scope_token"] is None
+    assert snapshot["active"] is False
+    assert snapshot["attached"] is False
+
+
+def test_retained_subscription_restores_policies_across_multiple_module_reloads():
+    import revit_mcp.dialog_policy as module
+
+    host = Host()
+    sub = subscribe(host)
+    original = sub._policy
+    delegate = host.handlers[0]
+    importlib.reload(module)
+    middle = module.DialogPolicy()
+    with sub.scoped_policy(middle, "middle"):
+        importlib.reload(module)
+        with sub.scoped_policy(module.DialogPolicy(), "newest"):
+            host.fire(Event())
+        assert sub._policy is middle
+        host.fire(Event())
+    assert sub._policy is original
+    assert host.handlers == [delegate]
+    assert host.add_count == 1
+    assert sub.snapshot()["policy_generation"] == 4
+    assert sub.current_sequence() == 2
+
+
+@pytest.mark.parametrize("event_type", [TASK, MESSAGE])
+def test_empty_id_dialog_is_observation_only_even_under_enabled_policy(event_type):
+    host = Host()
+    sub = subscribe(host, selected=policy())
+    event = Event(dialog_id="", event_type=event_type)
+    host.fire(event)
+    receipt = sub.snapshot()["receipts"][0]
+    assert receipt["dialog_id"] == ""
+    assert receipt["reason"] == "unsupported_dialog"
+    assert receipt["override_attempted"] is False
+    assert event.calls == []
+
+
+def test_message_box_type_is_not_an_exact_id_supported_catalog_type():
+    source = catalog()
+    source[DIALOG]["event_type"] = MESSAGE
+    with pytest.raises(ValueError, match="unsupported dialog event type"):
+        DialogPolicy(source)
