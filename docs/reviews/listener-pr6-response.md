@@ -14,8 +14,16 @@ at local reviewer commit `f1f7f2d`, reviewing `4e8ec5f..fd4250c`. Verdict:
 **approve with changes**, with findings F1-F6. That original-report gate is
 fulfilled. The report and repro remain in its read-only review checkout;
 this record maps each finding to owned corrections and owner validation.
-Focused reviewer confirmation of the corrected candidate is pending, so the
-owner does not claim reapproval.
+Focused reviewer confirmation of corrected candidate `dc262f1` is complete,
+recorded at local reviewer commit `7119caf`: all F1-F6 resolved, no material
+residuals, and no objection to the owned fast-forward publication. The reviewer
+confirmed imports from this checkout, 35 focused/109 unit tests, the inverted
+original repro, actual Windows ownership rows, and both source audits.
+
+The review notes a conservative boundary race: if the watchdog fires as the
+last byte arrives, a complete response can be labeled a timeout. This is accepted
+as non-blocking because diagnostics fail conservatively; it is not native
+acceptance or evidence of an outage cause.
 
 The saved system notice identifies an account-wide Claude five-hour usage cap,
 resetting October 7, 2026 at 15:20 America/Los_Angeles (22:20 UTC). The existing
@@ -163,5 +171,5 @@ git diff --check
 ```
 
 Final results are reported with the local correction commit to the coordinator;
-they establish the diagnostic behaviors above, not native acceptance or the
-reviewer's focused confirmation.
+they establish the diagnostic behaviors above, not native acceptance. The
+separately completed focused reviewer confirmation is recorded above.
