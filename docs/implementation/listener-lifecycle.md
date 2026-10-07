@@ -48,13 +48,16 @@ for supported source-level defect evidence. None of these exits prove native
 listener behavior. Source files are read once for consistent code/hash evidence.
 
 A separate source-only comparison on October 7 inspected
-`C:/Program Files/pyRevit-Master`. Its audit returned one activation worker and
+`C:/Program Files/pyRevit-Master`, whose version file reports
+`7.0.0.26254+1828`. Its audit returned one activation worker and
 events `start`, `HTTPServer.shutdown`, `socket.close`, `join`, with both defect
 flags false (exit 0). Inspected file hashes were
 `server.py: 676f5ed1e96e8a11bf9f7c07d06755e7090b8efbf299500a5fd09d8d40d1ce3e`
 and `server/__init__.py: 40984c0997e4597be2b4d83a63ce5972af05ae1fd1e3675521c4fa64ef52663d`.
 That installed source already removes the duplicate activation start and calls
-shutdown before socket close. The historical proposal is therefore relevant to
+shutdown before socket close. It also uses a `_stopping` guard in its
+`_serve_forever` wrapper, with a log-and-retry loop for serve errors. The
+historical duplicate-start and close-order proposal is therefore relevant to
 the recorded `cfce059` source, not a claim that those defects persist in every
 installed version. Installed disk source is not proof of the code or assemblies
 loaded in any Revit process. No Revit process was queried for this comparison.
@@ -85,10 +88,11 @@ Source-supported distinctions
 Ranked hypotheses for the disposable trial
 -----------------------------------------
 
-1. Duplicate serve loops or incomplete socket teardown. Removing the second
-   start and joining the sole worker before closing the socket should eliminate
-   duplicate observable owner threads and teardown socket errors. If native
-   endpoints still hang with this invariant, this is not a sufficient fix.
+1. Incomplete socket or accepted-worker teardown. Installed 7.0 already removes
+   the historical duplicate start and fixes shutdown-before-close ordering;
+   compare that release first. Those historical defects remain hypotheses only
+   for a build that still contains them. Native endpoint hangs on 7.0 would need
+   separate evidence about socket release and accepted-worker/engine lifetime.
 2. Engine resources referenced by a surviving native worker are retired during
    full reload. Callback-only replacement should pass while full reload fails;
    source-correct listener teardown alone may not cure it. Record engine/assembly
@@ -109,20 +113,27 @@ instead of treating source tests as a native regression test.
 Concrete baseline fix proposal
 ------------------------------
 
-First compare the actual chosen source/build against the recorded historical
-baseline and the separately inspected installed source. Do not propose another
-duplicate-start or shutdown-order patch where those changes are already present.
-For a baseline still exhibiting the historical defects, implement in a separately
-reviewed pyRevit change after an unmodified trial: remove `routes_server.start()`
-from `activate_server()` while
-preserving the constructor's existing startup behavior. Make subsequent start
-attempts explicitly idempotent or reject them with a clear state transition.
-Stop admission, call `HTTPServer.shutdown()` from a different thread than the
-serve loop, join the sole serve thread, then `server_close()`. Choose an explicit
-policy for already accepted workers before retiring their engine; joining only
-the accept loop does not drain requests blocked on the shared ExternalEvent.
-Keep failed-stop references and diagnostics visible rather than publishing a new
-healthy server or deleting its registration while ownership is uncertain.
+Use the inspected 7.0 release (or the explicitly chosen supported release) as
+the comparison baseline. Verify its source and loaded provenance separately;
+the disk inspection above establishes neither the active listener's source nor
+its native behavior. Do not repeat its already-fixed duplicate-start or
+shutdown-order changes.
+
+The remaining proposal for that 7.0 source is explicit `server_close()` socket
+cleanup, a documented policy for already accepted workers before retiring their
+engine, and visible failed-stop state. Joining only the accept loop does not
+drain requests blocked on the shared ExternalEvent. Its serve wrapper's retry
+loop must not hide a failed stop or present uncertain ownership as healthy.
+Keep failed-stop references and diagnostics rather than deleting registration
+or publishing a replacement listener while ownership is uncertain. Evaluate
+these changes separately in pyRevit after an unmodified disposable-host trial;
+this PR implements the diagnostics and proposal only.
+
+Only for a historical baseline still exhibiting the recorded defects, remove
+the second `routes_server.start()` in `activate_server()` and preserve the
+constructor's start behavior. Stop admission, call `HTTPServer.shutdown()` from
+a different thread than the serve loop, join the sole serve thread, then
+`server_close()`. Repeated start must be idempotent or explicitly refused.
 
 Test repeated start/stop, startup failure, accepted-worker drain, reload and
 process exit on the recorded IronPython/Revit build and a stock supported
@@ -174,9 +185,13 @@ observations, not production receiver identity validation.
 
 Thread observations support both Python 3 `_target` and IronPython 2.7
 `_Thread__target` storage, plus direct HTTP server and wrapper RoutesServer
-serve-loop targets. `unobservable_target_threads` records threads whose target
-cannot be inspected. `serve_thread_observation` explicitly marks the result as
-best effort. An empty observed list cannot establish that a worker is absent,
+serve-loop targets, including IronPython bound-method `im_self`. Each matched
+row records target name and thread name, ID and daemon status.
+`unobservable_target_threads` records threads whose target cannot be inspected.
+If no target is introspectable, `serve_thread_detection: unavailable` accompanies
+a null `observable_serve_threads`; it is not an empty observed worker list.
+`serve_thread_observation` marks all results as best effort. An empty observed
+list cannot establish that a worker is absent,
 an engine is retired, or accepted requests have drained. These private attributes
 remain diagnostic details rather than a production ownership contract.
 
@@ -202,6 +217,13 @@ process start time is unreadable, the row contains a null timestamp and an
 such row prevents another GET. This avoids accepting only the readable rows
 while a conflicting socket owner remains unverified.
 
+`listen_socket_count` in the receipt/checks is the maximum observed number of
+Listen rows across the before/after queries, separately from
+`unique_owner_process_count` (maximum distinct PID count).
+Two same-PID rows still count as two, and their local addresses remain visible.
+Multiple rows may reflect address-family/bind choices or a duplicate socket;
+this is hypothesis evidence, not an established outage cause or a health gate.
+
 The overall deadline covers connection setup, response headers and body. A
 socket watchdog interrupts only this diagnostic's connection if reads keep
 arriving slowly; previously each socket read could renew the timeout. Bytes
@@ -218,10 +240,17 @@ For an explicitly approved disposable host, record this matrix manually:
 | Targeted extension reload, at least 3 repetitions | User performs the supported targeted reload while all work is idle. Click Start if registration was cleared. Record actual engine replacement and callback cleanup separately from the Replace button. |
 | Full pyRevit reload, at least 3 repetitions | Capture before; user reloads only the disposable host while idle, clicks Start, then captures/collects after. Old runtime/target tokens must expire, no work replay. Preserve native siblings timeouts even if the diagnostic works. |
 | Process restart | User closes/restarts disposable Revit normally. Supply new PID/start time; fresh process/runtime identities, no revived operations or stale registrations. |
-| Baseline fix comparison | Repeat the same matrix on one narrowly patched pyRevit baseline. Preserve source hashes and actually loaded assemblies for both trials. |
+| Baseline fix comparison | Compare unmodified 7.0 (or the chosen supported release) with one narrowly patched remaining lifecycle gap. Preserve disk source hashes and actually loaded assemblies for both trials; do not infer loaded source from disk hashes. |
 
 If HTTP fails, use Capture and retain the local evidence and timestamped pyRevit
 exception log. Do not automatically reload/restart to make the measurement pass.
+After a full reload without Stop, cleanup of a retained object from the retired
+engine may fail. Capture first, before attempting Start/Replace; if Capture also
+fails, preserve the previous evidence file and exception logs. A subsequent
+`Previous diagnostic cleanup failed` refusal is an expected fail-closed matrix
+result. Start/Replace remain blocked until process restart; restarting the
+disposable host is the only supported recovery in this case. Do not clear its
+retained owner, retry activation automatically, or restart an editing session.
 Stop the diagnostic while idle, then the human can remove its staged directory
 and close the disposable host normally. No shared add-in settings need changing.
 
@@ -248,7 +277,7 @@ Automated verification
 ----------------------
 
 ```powershell
-uv run --extra test python -m pytest tests/unit/test_listener_lifecycle.py -q
+.venv/Scripts/python.exe -m pytest tests/unit/test_listener_lifecycle.py -q
 ```
 
 The tests exercise selected lifecycle source, busy-event replacement refusal,

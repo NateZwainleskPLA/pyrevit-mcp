@@ -37,16 +37,22 @@ def native_listener_snapshot():
     # _target is diagnostic implementation detail, not an ownership contract.
     owners = []
     unobservable = []
+    introspectable = 0
     for candidate in threading.enumerate():
-        target = getattr(candidate, '_target', getattr(candidate, '_Thread__target', None))
+        target = getattr(candidate, '_target', None) or getattr(candidate, '_Thread__target', None)
         owner = getattr(target, '__self__', getattr(target, 'im_self', None))
         target_name = getattr(target, '__name__', None)
+        if target is not None:
+            introspectable += 1
         if ((owner is active.server and target_name == 'serve_forever') or
                 (owner is active and target_name == '_serve_forever')):
-            owners.append({'name': candidate.name, 'id': candidate.ident})
+            owners.append({'name': candidate.name, 'id': candidate.ident,
+                           'daemon': getattr(candidate, 'daemon', None), 'target_name': target_name})
         elif target is None:
-            unobservable.append({'name': candidate.name, 'id': candidate.ident})
-    result['observable_serve_threads'] = owners
+            unobservable.append({'name': candidate.name, 'id': candidate.ident,
+                                 'daemon': getattr(candidate, 'daemon', None)})
+    result['observable_serve_threads'] = owners if introspectable else None
+    result['serve_thread_detection'] = 'observed' if introspectable else 'unavailable'
     result['unobservable_target_threads'] = unobservable
     result['serve_thread_observation'] = 'best_effort; not proof of worker absence or teardown'
     return result
