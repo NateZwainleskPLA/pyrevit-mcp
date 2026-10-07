@@ -12,16 +12,14 @@ from pathlib import Path
 
 def selected(source, name):
     tree = ast.parse(source)
-    node = next(n for n in tree.body if isinstance(n, (ast.ClassDef, ast.FunctionDef))
-                and n.name == name)
+    node = next((n for n in tree.body if isinstance(n, (ast.ClassDef, ast.FunctionDef))
+                 and n.name == name), None)
+    if node is None:
+        raise ValueError('Expected source definition: ' + name)
     return compile(ast.Module(body=[node], type_ignores=[]), "<lifecycle-source>", "exec")
 
 
-def audit(root):
-    root = Path(root)
-    paths = [root / "pyrevitlib/pyrevit/routes/server/server.py",
-             root / "pyrevitlib/pyrevit/routes/server/__init__.py"]
-    sources = [p.read_text(encoding="utf-8-sig") for p in paths]
+def _exercise(sources):
     workers = []
     events = []
 
@@ -70,10 +68,11 @@ def audit(root):
     first_count = len(workers)
     ns["activate_server"]()
     active.stop()
+    if not first_count or active.server_thread not in workers:
+        raise ValueError('Expected a retained activation worker')
+    if 'socket.close' not in events or 'HTTPServer.shutdown' not in events:
+        raise ValueError('Shutdown shape did not expose socket close and HTTPServer shutdown')
     return {
-        "coverage": "source-level doubles; no native outage reproduction",
-        "source_files": [{"path": str(p), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
-                         for p in paths],
         "first_activation_worker_count": first_count,
         "repeat_activation_worker_count": len(workers),
         "retained_worker_count": sum(w is active.server_thread for w in workers),
@@ -82,6 +81,28 @@ def audit(root):
         "socket_closed_before_shutdown": "socket.close" in events and
             events.index("socket.close") < events.index("HTTPServer.shutdown"),
     }
+
+
+def audit(root):
+    root = Path(root)
+    paths = [root / 'pyrevitlib/pyrevit/routes/server/server.py',
+             root / 'pyrevitlib/pyrevit/routes/server/__init__.py']
+    result = {'coverage': 'source-level doubles; no native outage reproduction',
+              'source_files': [], 'audit_status': 'unsupported_source',
+              'duplicate_serve_loops': None, 'socket_closed_before_shutdown': None}
+    try:
+        sources = []
+        for path in paths:
+            source_bytes = path.read_bytes()
+            result['source_files'].append({'path': str(path),
+                'sha256': hashlib.sha256(source_bytes).hexdigest()})
+            sources.append(source_bytes.decode('utf-8-sig'))
+        result.update(_exercise(sources))
+        result['audit_status'] = 'observed'
+    except Exception as ex:
+        # Unsupported baselines must never be mistaken for a passing audit.
+        result.update(error_type=type(ex).__name__, error=str(ex))
+    return result
 
 
 def main():
@@ -94,6 +115,8 @@ def main():
     if args.output:
         args.output.write_text(body + "\n", encoding="utf-8")
     print(body)
+    if result['audit_status'] != 'observed':
+        return 2
     return 1 if result["duplicate_serve_loops"] or result["socket_closed_before_shutdown"] else 0
 
 

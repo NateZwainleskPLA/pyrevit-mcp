@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 import http.client
 import json
 from pathlib import Path
+import socket
 import subprocess
+import threading
 import time
 from urllib.parse import quote
 
@@ -60,14 +62,34 @@ def owner_matches(rows, pid, started_at):
 def observe(port, path, timeout):
     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
     start = time.monotonic()
+    expired = threading.Event()
+    timer = None
+    response = None
     row = {'path': path, 'response_bytes': 0}
     try:
+        connection.connect()
+        transport = connection.sock
+        def expire():
+            expired.set()
+            try:
+                transport.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        remaining = timeout - (time.monotonic() - start)
+        if remaining <= 0:
+            raise TimeoutError('Overall diagnostic request deadline exceeded')
+        # Socket timeouts alone renew on each read, including drip-fed headers.
+        timer = threading.Timer(remaining, expire)
+        timer.daemon = True
+        timer.start()
         connection.request('GET', path, headers={'Connection': 'close'})
         response = connection.getresponse()
         row['status'] = response.status
         chunks = []
         # Preserve received byte count even if a truncated response stalls later.
         while True:
+            if expired.is_set():
+                raise TimeoutError('Overall diagnostic request deadline exceeded')
             chunk = response.read1(4096)
             if not chunk:
                 break
@@ -75,6 +97,8 @@ def observe(port, path, timeout):
             if row['response_bytes'] > 1024 * 1024:
                 raise ValueError('Diagnostic response exceeded 1 MiB limit')
             chunks.append(chunk)
+        if expired.is_set() or time.monotonic() - start >= timeout:
+            raise TimeoutError('Overall diagnostic request deadline exceeded')
         body = b''.join(chunks).decode('utf-8')
         try:
             row['body'] = json.loads(body)
@@ -82,8 +106,14 @@ def observe(port, path, timeout):
             row['body'] = body
         row['outcome'] = 'http_response'
     except Exception as ex:
+        if expired.is_set():
+            ex = TimeoutError('Overall diagnostic request deadline exceeded')
         row.update(outcome='transport_error', error_type=type(ex).__name__, error=str(ex))
     finally:
+        if timer is not None:
+            timer.cancel()
+        if response is not None:
+            response.close()
         row['elapsed_ms'] = round((time.monotonic() - start) * 1000, 2)
         connection.close()
     return row

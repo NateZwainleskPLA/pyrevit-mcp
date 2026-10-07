@@ -39,6 +39,14 @@ signals a detected source defect, not a native failure. The checked-in
 file hashes. The audit creates no socket or thread and executes no source-level
 imports. It does not establish that either defect caused the historical outage.
 
+The audit supports the two inspected source shapes. An absent definition,
+unavailable harness dependency, or shutdown pattern whose ordering cannot be
+observed returns `audit_status: unsupported_source`, null defect flags and an
+error receipt, with exit 2. It is inconclusive rather than healthy. Exit 0 is
+reserved for a supported source shape with neither detected defect, and exit 1
+for supported source-level defect evidence. None of these exits prove native
+listener behavior. Source files are read once for consistent code/hash evidence.
+
 A separate source-only comparison on October 7 inspected
 `C:/Program Files/pyRevit-Master`. Its audit returned one activation worker and
 events `start`, `HTTPServer.shutdown`, `socket.close`, `join`, with both defect
@@ -150,6 +158,13 @@ Buttons:
   route. It does not stop native Routes. Never use reload to force cleanup while
   any other runtime has work or an interaction active.
 
+Construction retains the successfully created event before attempting Idling
+subscription or initial capture. If either fails, cleanup attempts the retained
+delegate/event. Failed cleanup keeps the expired owner and prevents another Start
+from creating duplicate resources. Successful cleanup permits a later clean
+Start. This is tested containment of Python/native adapter failures, not proof
+that a disposed engine permits its delegate to be removed.
+
 GET `/listener_lifecycle_probe/state` has only a `request` argument and returns
 copied primitives. Adding `?generation=<old-nonce>` returns HTTP 409 after
 replacement. The nonce is diagnostic evidence, not a production `target` handle.
@@ -174,7 +189,7 @@ python -m scripts.listener_lifecycle.collect --port <port> --pid <pid> --started
 ```
 
 The Windows collector checks listening socket ownership before and after each
-sequential GET, uses a 3-second request timeout (maximum configurable 10),
+sequential GET, uses a 3-second overall GET deadline (maximum configurable 10),
 preserves transport errors/received byte counts, and writes partial receipts.
 Wrong owner stops the collector without calling that process. Failure to obtain
 OS ownership information fails closed. Receipt files contain local sibling
@@ -186,6 +201,13 @@ process start time is unreadable, the row contains a null timestamp and an
 `ownership_error`; it is not silently dropped from a mixed-owner result. Any
 such row prevents another GET. This avoids accepting only the readable rows
 while a conflicting socket owner remains unverified.
+
+The overall deadline covers connection setup, response headers and body. A
+socket watchdog interrupts only this diagnostic's connection if reads keep
+arriving slowly; previously each socket read could renew the timeout. Bytes
+received before deadline expiry remain counted in the failure receipt. Each OS
+ownership query has its own 10-second subprocess limit, separate from the GET
+budget. There is no Revit execution cancellation or listener shutdown involved.
 
 For an explicitly approved disposable host, record this matrix manually:
 

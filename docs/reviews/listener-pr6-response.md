@@ -17,6 +17,11 @@ handoff. The responses below address concrete problems reconstructed from the
 saved review activity and its local thread-detection repro. Final review
 completion/confirmation remains outstanding.
 
+The saved system notice identifies an account-wide Claude five-hour usage cap,
+resetting October 7, 2026 at 15:20 America/Los_Angeles (22:20 UTC). The existing
+reviewer/worktree/evidence remain intact. No further pre-reset retry, new thread,
+provider substitution, scheduler or timer for retrying the review was created.
+
 Ownership query: unreadable rows
 -------------------------------
 
@@ -71,6 +76,45 @@ installation, reload, model edits or shared configuration changes occurred.
 The listener's accepted-worker drain, event/engine retention and full native
 reload matrix remain pending release gates. No production listener patch or
 dialog/diagnostics foundation is introduced by these corrections.
+
+Assessment of unconfirmed review concerns
+----------------------------------------
+
+These were questions in saved reasoning, not finalized Opus findings. Owner
+tests assessed them independently:
+
+* Initial capture/cleanup failure: reproduced an unretained successfully created
+  event when capture threw and disposal also threw. A failing test demonstrated
+  the missing retained owner. Construction now creates the event before
+  subscription, retains the probe, and then activates it inside the cleanup
+  boundary. Partial subscription failure and initial capture failure either
+  detach/dispose successfully or retain an expired owner that blocks replacement.
+  Tests also confirm that successful cleanup allows a clean later Start.
+* Old-engine teardown: actual cross-engine native removal cannot be established
+  without a disposable fixture. Doubles verify that a retained delegate removal
+  exception expires callbacks, preserves the owner/event, and blocks replacement
+  rather than clearing the lease. Another test creates a new Python Probe class
+  while retaining an old instance and verifies removal of the exact old delegate.
+  These establish adapter containment, not native engine lifetime. The native
+  release gate remains explicitly open.
+* Unsupported audit source shape: reproduced `StopIteration` for a missing
+  source definition and `ValueError` for unobserved shutdown ordering. The audit
+  now emits an inconclusive `unsupported_source` receipt with null defect flags,
+  source hashes/error and exit 2. Tests exercise both shapes and CLI receipt/exit
+  behavior; supported historical and separately installed source audits retain
+  their meaningful defect/no-defect results.
+* Per-read versus overall timeout: slow-drip local HTTP fixtures reproduced a
+  response exceeding the supplied timeout while each read arrived in time. The
+  collector now enforces an overall connection/header/body deadline by shutting
+  down only its own socket when the budget expires. Tests cover both drip-fed
+  headers and body, preserve partial byte counts, and verify bounded failure.
+  OS ownership subprocess limits are documented separately. This local network
+  watchdog neither cancels Revit work nor schedules a reviewer retry.
+
+All locally reproduced diagnostic defects above are corrected and tested.
+Unconfirmed native teardown remains a release gate, not a finding converted to
+a proven defect. The original Opus review is still incomplete; these assessments
+must not be described as exhaustive Opus findings, completion or reapproval.
 
 Validation commands
 -------------------
