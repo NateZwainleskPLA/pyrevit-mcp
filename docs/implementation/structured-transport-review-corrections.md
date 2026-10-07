@@ -1,9 +1,11 @@
 # Structured transport review corrections
 
-These are local corrections to Origin PR #2's published transport head
+These corrections were implemented locally against Origin PR #2's transport head
 `e698a7eb1b8f083ed884ee694b2af284462d2934`, following the Opus review at local
-commit `5280c0f`. No correction has been pushed or posted to GitHub. The original
-build branch remains preserved. No native Revit session was contacted.
+commit `5280c0f`. The subsequent user instruction authorizes publishing the
+completed owned corrections to `pr/structured-transport` on Origin, based on
+`master`. The original build branch remains preserved. No native Revit session
+was contacted; publication does not include deployment or merge.
 
 ## Findings addressed
 
@@ -36,7 +38,7 @@ unmarked 503, non-JSON failures and bare dictionary/string values do not establi
 readiness. Tests exercise actual `request_revit`/`httpx.MockTransport` responses,
 including deceptive 4xx/5xx bodies claiming connector liveness.
 
-This local correction leaves `/status/` unchanged. The coordinator is composing
+This correction leaves `/status/` unchanged. The coordinator has composed
 completed status commit `2eb54f6bf895e5ee5b8334e76107b764fdfb14da`, which switches
 legacy polling to the separate raw `/health/` registrar. During that composition,
 retain `/health/`, its document-free semantics and no endpoint fallback, and
@@ -44,8 +46,10 @@ replace the legacy predicate with **received JSON object + HTTP 200 +
 `api_name == "revit_mcp"` + `status == "alive"`**. Do not retain the legacy 503
 allowance for `/health/`. Adapt these tests' `/status/` assertions accordingly.
 Modern metadata/full-identity readiness and TargetedAPI routing remain owned by
-routing. Conflict guidance and the completed local M2 hash were sent to the
-coordinator and status owner.
+routing. Conflict guidance and the completed M2 hash were sent to the coordinator
+and status owner. The separate completed composition at
+`72f491968c371923e3c3a973b772611c794c2df0` has 201 passing unit tests; its strict
+health changes are not imported into this focused transport branch.
 
 ### L1: request-build errors
 
@@ -92,6 +96,15 @@ Transport does not retry any request.
   require a separate output-retention design and realistic size checks.
 
 ## Validation and limits
+
+The original Opus verdict was approve after fixing M1, with no High findings.
+Owner verification reproduced the original failures, corrected all six
+actionable findings and reran the original review repro. Independent Opus
+follow-up confirmation is still pending: its attempted verification and the
+retry in the same existing review thread failed at the provider session limit,
+without producing additional findings. This record does not claim reviewer
+reapproval. Proxy policy and diagnostic memory retention were informational
+observations, not unresolved approval conditions.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/unit -q -p no:cacheprovider
