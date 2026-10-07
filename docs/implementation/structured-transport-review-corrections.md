@@ -99,12 +99,21 @@ Transport does not retry any request.
 
 The original Opus verdict was approve after fixing M1, with no High findings.
 Owner verification reproduced the original failures, corrected all six
-actionable findings and reran the original review repro. Independent Opus
-follow-up confirmation is still pending: its attempted verification and the
-retry in the same existing review thread failed at the provider session limit,
-without producing additional findings. This record does not claim reviewer
-reapproval. Proxy policy and diagnostic memory retention were informational
-observations, not unresolved approval conditions.
+actionable findings and reran the original review repro. Independent follow-up
+subsequently returned **APPROVE**, recorded in review commit
+`078c2707f7d2ce3e3466a764df37a099ea13294b`. The reviewer tested candidate
+`f65ca8c5e1832d3b559619fe92dd4a9df0437171`, confirmed the review checkout matched
+its implementation, passed 166 unit tests, reran the original repros and added
+follow-up edge cases. Publication commit `d287d43` changed only this document;
+the approved production code and tests are unchanged.
+
+Earlier follow-up attempts were blocked by Claude's account-wide five-hour usage
+cap; that pending state is now resolved. Proxy policy and diagnostic memory
+retention remain agreed informational deferrals. The reviewer also noted a
+non-blocking formatting nit: native errors show `Status: unknown` and repeat the
+exception in additional response data. It does not affect classification or
+preservation, so no production change is made for it. Approval covers controlled
+HTTP/source checks, not native Revit acceptance.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/unit -q -p no:cacheprovider
