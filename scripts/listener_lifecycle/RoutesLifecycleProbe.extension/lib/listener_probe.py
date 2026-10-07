@@ -36,12 +36,19 @@ def native_listener_snapshot():
         result['socket_error'] = str(ex)
     # _target is diagnostic implementation detail, not an ownership contract.
     owners = []
+    unobservable = []
     for candidate in threading.enumerate():
-        target = getattr(candidate, '_target', None)
+        target = getattr(candidate, '_target', getattr(candidate, '_Thread__target', None))
         owner = getattr(target, '__self__', getattr(target, 'im_self', None))
-        if owner is active.server:
+        target_name = getattr(target, '__name__', None)
+        if ((owner is active.server and target_name == 'serve_forever') or
+                (owner is active and target_name == '_serve_forever')):
             owners.append({'name': candidate.name, 'id': candidate.ident})
+        elif target is None:
+            unobservable.append({'name': candidate.name, 'id': candidate.ident})
     result['observable_serve_threads'] = owners
+    result['unobservable_target_threads'] = unobservable
+    result['serve_thread_observation'] = 'best_effort; not proof of worker absence or teardown'
     return result
 
 
@@ -57,14 +64,15 @@ class Probe(UI.IExternalEventHandler):
         self.idle_count = 0
         self.event_count = 0
         self.cached = {}
-        self.event = UI.ExternalEvent.Create(self)
+        self.idle_detach_required = False
         self.idle_delegate = self.on_idle
+        self.event = UI.ExternalEvent.Create(self)
+
+    def activate(self):
+        # A failed subscription can have taken effect; retain cleanup ownership.
+        self.idle_detach_required = True
         self.app.Idling += self.idle_delegate
-        try:
-            self.capture()
-        except Exception:
-            self.stop()
-            raise
+        self.capture()
 
     def capture(self):
         process = System.Diagnostics.Process.GetCurrentProcess()
@@ -129,7 +137,9 @@ class Probe(UI.IExternalEventHandler):
                 raise RuntimeError('Probe event busy; wait before replacing or disposing')
             self.stopped = True
         # Fail visibly if cleanup fails; do not create a replacement after that.
-        self.app.Idling -= self.idle_delegate
+        if self.idle_detach_required:
+            self.app.Idling -= self.idle_delegate
+            self.idle_detach_required = False
         self.event.Dispose()
         self.cleanup_complete = True
 
@@ -139,6 +149,8 @@ def initialize(app, path):
     if old is not None:
         old.stop()
     probe = Probe(app, path)
+    # Retain before any subscription or capture can fail, including failed disposal.
+    envvars.set_pyrevit_env_var(KEY, probe)
     def state(request):
         # Only copied primitives. No doc/uidoc/uiapp signature or API object access.
         expected = request.query_params.get('generation')
@@ -146,14 +158,13 @@ def initialize(app, path):
             return routes.make_response({'error': 'stale_diagnostic_generation'}, status=409)
         return probe.inspect()
     try:
+        probe.activate()
         api = routes.API(API)
         api.route('/state', methods=['GET'])(state)
     except Exception:
         # Retain failed cleanup state so the next Start cannot duplicate resources.
-        envvars.set_pyrevit_env_var(KEY, probe)
         probe.stop()
         raise
-    envvars.set_pyrevit_env_var(KEY, probe)
     return probe
 
 

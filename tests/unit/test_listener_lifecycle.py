@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.listener_lifecycle.collect import collect, evaluate, observe, owner_matches, socket_owner
-from scripts.listener_lifecycle.source_audit import audit, selected
+from scripts.listener_lifecycle.source_audit import audit, selected, main as audit_main
 
 ROOT = Path(__file__).resolve().parents[2] / 'scripts/listener_lifecycle'
 HOST = ROOT / 'RoutesLifecycleProbe.extension/lib/listener_probe.py'
@@ -59,6 +59,42 @@ def activate_server():
     # Demonstrates the audit goes green when the duplicate start is removed.
     init.write_text(init.read_text().replace('        active.start()\n', ''))
     assert audit(tmp_path)['first_activation_worker_count'] == 1
+
+
+@pytest.mark.parametrize('shape', ['missing_definition', 'unobserved_shutdown'])
+def test_source_audit_unsupported_shape_is_inconclusive(tmp_path, shape, monkeypatch, capsys):
+    server = tmp_path / 'pyrevitlib/pyrevit/routes/server'
+    server.mkdir(parents=True)
+    (server / 'server.py').write_text('''
+class ThreadedHttpServer(ThreadingMixIn, HTTPServer):
+    def shutdown(self):
+        self.socket.close()
+class RoutesServer:
+    def __init__(self, host, port):
+        self.server = ThreadedHttpServer((host, port), HttpRequestHandler)
+        self.server_thread = threading.Thread(target=self.server.serve_forever)
+        self.server_thread.start()
+    def stop(self):
+        self.server.shutdown()
+        self.server_thread.join()
+''')
+    (server / '__init__.py').write_text('''
+def activate_server():
+    return server.RoutesServer('127.0.0.1', 48884)
+''')
+    if shape == 'missing_definition':
+        (server / 'server.py').write_text('pass\n')
+    result = audit(tmp_path)
+    assert result['audit_status'] == 'unsupported_source'
+    assert result['duplicate_serve_loops'] is None
+    assert result['socket_closed_before_shutdown'] is None
+    assert result['error']
+    assert all(row['sha256'] for row in result['source_files'])
+    output = tmp_path / 'inconclusive.json'
+    monkeypatch.setattr(sys, 'argv', ['source_audit', str(tmp_path), '--output', str(output)])
+    assert audit_main() == 2
+    assert json.loads(output.read_text())['audit_status'] == 'unsupported_source'
+    assert json.loads(capsys.readouterr().out)['duplicate_serve_loops'] is None
 
 
 def host_namespace(monkeypatch):
@@ -172,12 +208,125 @@ def test_failed_capture_always_releases_running_flag(monkeypatch):
     assert probe.cleanup_complete
 
 
+def test_constructor_capture_cleanup_failure_retains_owner(monkeypatch):
+    ns, app, _ = host_namespace(monkeypatch)
+    created = []
+    def create(handler):
+        event = SimpleNamespace(IsPending=False)
+        def fail_dispose():
+            raise RuntimeError('dispose failed')
+        event.Dispose = fail_dispose
+        created.append(event)
+        return event
+    ns['UI'].ExternalEvent.Create = create
+    def fail_capture(self):
+        raise RuntimeError('initial capture failed')
+    monkeypatch.setattr(ns['Probe'], 'capture', fail_capture)
+    with pytest.raises(RuntimeError, match='dispose failed'):
+        ns['initialize'](app, 'unused')
+    retained = ns['envvars'].get_pyrevit_env_var(ns['KEY'])
+    assert retained is not None and retained.event is created[0]
+    assert retained.stopped and not retained.cleanup_complete
+    with pytest.raises(RuntimeError, match='Previous diagnostic cleanup failed'):
+        ns['initialize'](app, 'unused')
+    assert len(created) == 1
+
+
+def test_failed_initial_capture_cleanup_allows_next_clean_start(monkeypatch):
+    ns, app, _ = host_namespace(monkeypatch)
+    original_capture = ns['Probe'].capture
+    def fail_capture(self):
+        raise RuntimeError('initial capture failed')
+    monkeypatch.setattr(ns['Probe'], 'capture', fail_capture)
+    with pytest.raises(RuntimeError, match='initial capture failed'):
+        ns['initialize'](app, 'unused')
+    failed = ns['envvars'].get_pyrevit_env_var(ns['KEY'])
+    assert failed.cleanup_complete and failed.event.disposed
+    assert not app.Idling.callbacks
+    monkeypatch.setattr(ns['Probe'], 'capture', original_capture)
+    fresh = ns['initialize'](app, 'unused')
+    assert app.Idling.callbacks == [fresh.idle_delegate]
+
+
+def test_partial_subscription_failure_cleans_retained_resources(monkeypatch):
+    ns, app, _ = host_namespace(monkeypatch)
+    original_attach = type(app.Idling).__iadd__
+    def attach_then_fail(self, delegate):
+        original_attach(self, delegate)
+        raise RuntimeError('subscription failed after attach')
+    monkeypatch.setattr(type(app.Idling), '__iadd__', attach_then_fail)
+    with pytest.raises(RuntimeError, match='subscription failed after attach'):
+        ns['initialize'](app, 'unused')
+    failed = ns['envvars'].get_pyrevit_env_var(ns['KEY'])
+    assert failed.cleanup_complete and failed.event.disposed
+    assert not app.Idling.callbacks
+
+
+def test_unavailable_retained_delegate_blocks_replacement_without_clearing_owner(monkeypatch):
+    ns, app, _ = host_namespace(monkeypatch)
+    old = ns['initialize'](app, 'unused')
+    def unavailable(self, delegate):
+        raise RuntimeError('retained delegate unavailable')
+    monkeypatch.setattr(type(app.Idling), '__isub__', unavailable)
+    with pytest.raises(RuntimeError, match='retained delegate unavailable'):
+        ns['initialize'](app, 'unused')
+    assert ns['envvars'].get_pyrevit_env_var(ns['KEY']) is old
+    assert old.stopped and not old.cleanup_complete and not old.event.disposed
+    old.on_idle(app, None)
+    assert old.idle_count == 0
+    with pytest.raises(RuntimeError, match='Previous diagnostic cleanup failed'):
+        ns['initialize'](app, 'unused')
+    assert app.Idling.callbacks == [old.idle_delegate]
+
+
+def test_reloaded_probe_class_can_retire_old_instance(monkeypatch):
+    ns, app, _ = host_namespace(monkeypatch)
+    old = ns['initialize'](app, 'unused')
+    capture = ns['Probe'].capture
+    exec(selected(HOST.read_text(), 'Probe'), ns)
+    monkeypatch.setattr(ns['Probe'], 'capture', capture)
+    fresh = ns['initialize'](app, 'unused')
+    assert type(fresh) is not type(old)
+    assert old.cleanup_complete and old.event.disposed
+    assert app.Idling.callbacks == [fresh.idle_delegate]
+
+
 def test_no_automatic_registration_or_context_route_signature():
     tree = ast.parse((ROOT / 'RoutesLifecycleProbe.extension/startup.py').read_text())
     assert not any(isinstance(node, ast.Call) for node in ast.walk(tree))
     state = next(node for node in ast.walk(ast.parse(HOST.read_text()))
                  if isinstance(node, ast.FunctionDef) and node.name == 'state')
     assert [arg.arg for arg in state.args.args] == ['request']
+
+
+@pytest.mark.parametrize('storage', ['_target', '_Thread__target'])
+@pytest.mark.parametrize('wrapped', [False, True])
+@pytest.mark.parametrize('method_style', ['py3', 'py2'])
+def test_listener_thread_observation_supports_engine_and_server_variants(storage, wrapped, method_style):
+    class HTTPServer:
+        socket = SimpleNamespace(getsockname=lambda: ('127.0.0.1', 48884), fileno=lambda: 7)
+        def serve_forever(self):
+            pass
+    class RoutesServer:
+        server = HTTPServer()
+        def _serve_forever(self):
+            pass
+    active = RoutesServer()
+    target = active._serve_forever if wrapped else active.server.serve_forever
+    if method_style == 'py2':
+        target = SimpleNamespace(im_self=active if wrapped else active.server,
+                                 __name__='_serve_forever' if wrapped else 'serve_forever')
+    worker = SimpleNamespace(name='listener', ident=17, is_alive=lambda: True)
+    setattr(worker, storage, target)
+    active.server_thread = worker
+    unknown = SimpleNamespace(name='target-unavailable', ident=18)
+    ns = dict(get_active_server=lambda: active,
+              threading=SimpleNamespace(active_count=lambda: 2, enumerate=lambda: [worker, unknown]))
+    exec(selected(HOST.read_text(), 'native_listener_snapshot'), ns)
+    result = ns['native_listener_snapshot']()
+    assert result['observable_serve_threads'] == [{'name': 'listener', 'id': 17}]
+    assert result['unobservable_target_threads'] == [{'name': 'target-unavailable', 'id': 18}]
+    assert 'not proof' in result['serve_thread_observation']
 
 
 def receipt_rows():
@@ -229,6 +378,40 @@ def test_windows_socket_owner_query_uses_local_python_fixture():
     assert owner_matches(rows, os.getpid(), rows[0]['process_started_at'])
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Execute embedded PowerShell with controlled OS doubles')
+def test_windows_owner_query_retains_unreadable_owner_row(monkeypatch):
+    import scripts.listener_lifecycle.collect as module
+    actual_run = module.subprocess.run
+    # Exercise the actual embedded script; only its OS data sources are replaced.
+    fixture = '''
+function Get-NetTCPConnection {
+    [CmdletBinding()] param([string]$State, [int]$LocalPort)
+    [pscustomobject]@{OwningProcess=17; LocalAddress='0.0.0.0'; LocalPort=$LocalPort}
+    [pscustomobject]@{OwningProcess=99; LocalAddress='127.0.0.1'; LocalPort=$LocalPort}
+}
+function Get-Process {
+    [CmdletBinding()] param([int]$Id)
+    if ($Id -eq 17) {
+        [pscustomobject]@{Id=17; StartTime=[datetime]'2026-10-05T12:00:00Z'}
+    } else {
+        [pscustomobject]@{Id=$Id; StartTime=$null}
+    }
+}
+'''
+    def execute(args, **kwargs):
+        args = list(args)
+        args[-1] = fixture + args[-1]
+        return actual_run(args, **kwargs)
+    monkeypatch.setattr(module.subprocess, 'run', execute)
+    rows = socket_owner(48884)
+    assert len(rows) == 2
+    assert rows[1]['process_id'] == 99 and rows[1]['process_started_at'] is None
+    assert rows[1]['local_address'] == '127.0.0.1' and rows[1]['local_port'] == 48884
+    assert rows[1]['ownership_error']
+    assert owner_matches(rows[:1], 17, START)
+    assert not owner_matches(rows, 17, START)
+
+
 def test_collector_persists_partial_receipt_on_ownership_inspection_failure(monkeypatch, tmp_path):
     import scripts.listener_lifecycle.collect as module
     calls = iter([[{'process_id': 17, 'process_started_at': START}], RuntimeError('OS query failed')])
@@ -275,6 +458,44 @@ def test_collector_preserves_zero_byte_timeout_from_local_http_fixture():
         assert result['outcome'] == 'transport_error'
         assert result['response_bytes'] == 0
         assert result['error_type'] == 'TimeoutError'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize('phase', ['headers', 'body'])
+def test_collector_overall_deadline_bounds_slow_drip(phase):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                if phase == 'headers':
+                    self.wfile.write(b'HTTP/1.1 200 OK\r\nX-Drip: ')
+                else:
+                    self.send_response(200)
+                    self.send_header('Content-Length', '30')
+                    self.end_headers()
+                for unused in range(30):
+                    self.wfile.write(b'x')
+                    self.wfile.flush()
+                    time.sleep(0.012)
+                if phase == 'headers':
+                    self.wfile.write(b'\r\nContent-Length: 1\r\n\r\nx')
+            except OSError:
+                pass  # The bounded diagnostic deliberately closes its socket.
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = observe(server.server_address[1], '/state', 0.06)
+        assert result['outcome'] == 'transport_error'
+        assert result['error_type'] == 'TimeoutError'
+        assert result['elapsed_ms'] < 250
+        if phase == 'body':
+            assert 0 < result['response_bytes'] < 30
     finally:
         server.shutdown()
         server.server_close()

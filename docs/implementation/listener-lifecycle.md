@@ -39,6 +39,26 @@ signals a detected source defect, not a native failure. The checked-in
 file hashes. The audit creates no socket or thread and executes no source-level
 imports. It does not establish that either defect caused the historical outage.
 
+The audit supports the two inspected source shapes. An absent definition,
+unavailable harness dependency, or shutdown pattern whose ordering cannot be
+observed returns `audit_status: unsupported_source`, null defect flags and an
+error receipt, with exit 2. It is inconclusive rather than healthy. Exit 0 is
+reserved for a supported source shape with neither detected defect, and exit 1
+for supported source-level defect evidence. None of these exits prove native
+listener behavior. Source files are read once for consistent code/hash evidence.
+
+A separate source-only comparison on October 7 inspected
+`C:/Program Files/pyRevit-Master`. Its audit returned one activation worker and
+events `start`, `HTTPServer.shutdown`, `socket.close`, `join`, with both defect
+flags false (exit 0). Inspected file hashes were
+`server.py: 676f5ed1e96e8a11bf9f7c07d06755e7090b8efbf299500a5fd09d8d40d1ce3e`
+and `server/__init__.py: 40984c0997e4597be2b4d83a63ce5972af05ae1fd1e3675521c4fa64ef52663d`.
+That installed source already removes the duplicate activation start and calls
+shutdown before socket close. The historical proposal is therefore relevant to
+the recorded `cfce059` source, not a claim that those defects persist in every
+installed version. Installed disk source is not proof of the code or assemblies
+loaded in any Revit process. No Revit process was queried for this comparison.
+
 Source-supported distinctions
 -----------------------------
 
@@ -46,7 +66,7 @@ Source-supported distinctions
   ExternalEvent, retained runtime, and route handlers. Detaching its callback
   does not own or repair the native Routes server. Retired runtime references
   must remain expired; disposing an active/pending event is unsafe.
-* Native listener lifecycle: `RoutesServer.__init__()` calls `start()`;
+* Historical native listener lifecycle at `cfce059`: `RoutesServer.__init__()` calls `start()`;
   `activate_server()` calls `start()` again. Both threads target the same
   `serve_forever` method, while `server_thread` retains only the second.
   `stop()` therefore joins only one retained thread. `ThreadedHttpServer.shutdown`
@@ -89,8 +109,12 @@ instead of treating source tests as a native regression test.
 Concrete baseline fix proposal
 ------------------------------
 
-Implement in a separately reviewed pyRevit baseline change, after recording an
-unmodified trial: remove `routes_server.start()` from `activate_server()` while
+First compare the actual chosen source/build against the recorded historical
+baseline and the separately inspected installed source. Do not propose another
+duplicate-start or shutdown-order patch where those changes are already present.
+For a baseline still exhibiting the historical defects, implement in a separately
+reviewed pyRevit change after an unmodified trial: remove `routes_server.start()`
+from `activate_server()` while
 preserving the constructor's existing startup behavior. Make subsequent start
 attempts explicitly idempotent or reject them with a clear state transition.
 Stop admission, call `HTTPServer.shutdown()` from a different thread than the
@@ -134,12 +158,27 @@ Buttons:
   route. It does not stop native Routes. Never use reload to force cleanup while
   any other runtime has work or an interaction active.
 
+Construction retains the successfully created event before attempting Idling
+subscription or initial capture. If either fails, cleanup attempts the retained
+delegate/event. Failed cleanup keeps the expired owner and prevents another Start
+from creating duplicate resources. Successful cleanup permits a later clean
+Start. This is tested containment of Python/native adapter failures, not proof
+that a disposed engine permits its delegate to be removed.
+
 GET `/listener_lifecycle_probe/state` has only a `request` argument and returns
 copied primitives. Adding `?generation=<old-nonce>` returns HTTP 409 after
 replacement. The nonce is diagnostic evidence, not a production `target` handle.
 It provides no permission to execute or recover an operation. The collector is
 GET-only and local-loopback-only; native siblings/unknown-path responses are
 observations, not production receiver identity validation.
+
+Thread observations support both Python 3 `_target` and IronPython 2.7
+`_Thread__target` storage, plus direct HTTP server and wrapper RoutesServer
+serve-loop targets. `unobservable_target_threads` records threads whose target
+cannot be inspected. `serve_thread_observation` explicitly marks the result as
+best effort. An empty observed list cannot establish that a worker is absent,
+an engine is retired, or accepted requests have drained. These private attributes
+remain diagnostic details rather than a production ownership contract.
 
 Run each phase from this checkout using the staged evidence's exact PID, start
 time and observed socket port; there is no default destination:
@@ -150,12 +189,25 @@ python -m scripts.listener_lifecycle.collect --port <port> --pid <pid> --started
 ```
 
 The Windows collector checks listening socket ownership before and after each
-sequential GET, uses a 3-second request timeout (maximum configurable 10),
+sequential GET, uses a 3-second overall GET deadline (maximum configurable 10),
 preserves transport errors/received byte counts, and writes partial receipts.
 Wrong owner stops the collector without calling that process. Failure to obtain
 OS ownership information fails closed. Receipt files contain local sibling
 registration metadata: keep them local and redact unrelated endpoints before
 sharing. HTTP success alone never marks native acceptance passed.
+
+The OS query retains every listening row's PID, local address and port. If a
+process start time is unreadable, the row contains a null timestamp and an
+`ownership_error`; it is not silently dropped from a mixed-owner result. Any
+such row prevents another GET. This avoids accepting only the readable rows
+while a conflicting socket owner remains unverified.
+
+The overall deadline covers connection setup, response headers and body. A
+socket watchdog interrupts only this diagnostic's connection if reads keep
+arriving slowly; previously each socket read could renew the timeout. Bytes
+received before deadline expiry remain counted in the failure receipt. Each OS
+ownership query has its own 10-second subprocess limit, separate from the GET
+budget. There is no Revit execution cancellation or listener shutdown involved.
 
 For an explicitly approved disposable host, record this matrix manually:
 
@@ -203,5 +255,8 @@ The tests exercise selected lifecycle source, busy-event replacement refusal,
 exact delegate detachment, stale diagnostic generation, cleanup failure,
 runner-flag release, copied snapshots, request-only signatures, inert startup,
 OS owner mismatch, distinct native/probe health, and a real local HTTP server's
-zero-byte timeout. These are source and CPython diagnostics checks, not native
+zero-byte timeout. Real Windows tests exercise the embedded PowerShell using a
+local Python socket and controlled mixed readable/unreadable process rows.
+Parameterized thread tests cover both storage styles, bound-method styles and
+serve-loop owners. These are source and CPython diagnostics checks, not native
 Revit API, IronPython, engine unload or reload coverage.

@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 import http.client
 import json
 from pathlib import Path
+import socket
 import subprocess
+import threading
 import time
 from urllib.parse import quote
 
@@ -28,10 +30,20 @@ def same_instant(left, right):
 
 def socket_owner(port):
     # Fixed script plus validated integer; no user text is interpolated as shell code.
-    script = """$rows = @(Get-NetTCPConnection -State Listen -LocalPort PORT -ErrorAction Stop |
+    script = """$ErrorActionPreference = 'Stop'
+$rows = @(Get-NetTCPConnection -State Listen -LocalPort PORT -ErrorAction Stop |
     ForEach-Object {
-        $p = Get-Process -Id $_.OwningProcess -ErrorAction Stop
-        @{process_id=$p.Id; process_started_at=$p.StartTime.ToUniversalTime().ToString('o')}
+        $row = @{process_id=$_.OwningProcess; process_started_at=$null;
+            local_address=$_.LocalAddress; local_port=$_.LocalPort}
+        try {
+            $p = Get-Process -Id $_.OwningProcess -ErrorAction Stop
+            $started = $p.StartTime
+            if ($null -eq $started) { throw 'Process start time unavailable' }
+            $row.process_started_at = $started.ToUniversalTime().ToString('o')
+        } catch {
+            $row.ownership_error = $_.Exception.Message
+        }
+        $row
     })
 ConvertTo-Json -InputObject $rows -Compress
 """.replace('PORT', str(int(port)))
@@ -41,7 +53,8 @@ ConvertTo-Json -InputObject $rows -Compress
 
 
 def owner_matches(rows, pid, started_at):
-    return bool(rows) and all(row['process_id'] == pid and
+    return bool(rows) and all(isinstance(row, dict) and
+                             not row.get('ownership_error') and row.get('process_id') == pid and
                              same_instant(row.get('process_started_at'), started_at)
                              for row in rows)
 
@@ -49,14 +62,34 @@ def owner_matches(rows, pid, started_at):
 def observe(port, path, timeout):
     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
     start = time.monotonic()
+    expired = threading.Event()
+    timer = None
+    response = None
     row = {'path': path, 'response_bytes': 0}
     try:
+        connection.connect()
+        transport = connection.sock
+        def expire():
+            expired.set()
+            try:
+                transport.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        remaining = timeout - (time.monotonic() - start)
+        if remaining <= 0:
+            raise TimeoutError('Overall diagnostic request deadline exceeded')
+        # Socket timeouts alone renew on each read, including drip-fed headers.
+        timer = threading.Timer(remaining, expire)
+        timer.daemon = True
+        timer.start()
         connection.request('GET', path, headers={'Connection': 'close'})
         response = connection.getresponse()
         row['status'] = response.status
         chunks = []
         # Preserve received byte count even if a truncated response stalls later.
         while True:
+            if expired.is_set():
+                raise TimeoutError('Overall diagnostic request deadline exceeded')
             chunk = response.read1(4096)
             if not chunk:
                 break
@@ -64,6 +97,8 @@ def observe(port, path, timeout):
             if row['response_bytes'] > 1024 * 1024:
                 raise ValueError('Diagnostic response exceeded 1 MiB limit')
             chunks.append(chunk)
+        if expired.is_set() or time.monotonic() - start >= timeout:
+            raise TimeoutError('Overall diagnostic request deadline exceeded')
         body = b''.join(chunks).decode('utf-8')
         try:
             row['body'] = json.loads(body)
@@ -71,8 +106,14 @@ def observe(port, path, timeout):
             row['body'] = body
         row['outcome'] = 'http_response'
     except Exception as ex:
+        if expired.is_set():
+            ex = TimeoutError('Overall diagnostic request deadline exceeded')
         row.update(outcome='transport_error', error_type=type(ex).__name__, error=str(ex))
     finally:
+        if timer is not None:
+            timer.cancel()
+        if response is not None:
+            response.close()
         row['elapsed_ms'] = round((time.monotonic() - start) * 1000, 2)
         connection.close()
     return row
