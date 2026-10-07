@@ -219,8 +219,7 @@ class NativeExecutionAdapter(object):
         self.safety = safety or ExecutionSafety()
         validate_output_limit(output_limit_chars)
         self.output_limit_chars = output_limit_chars
-        self.safety_known = False
-        self.safe = False
+        self._host_safety = (False, False)
 
     def validate_cached(self, payload):
         from .identity import IdentityError
@@ -247,24 +246,28 @@ class NativeExecutionAdapter(object):
 
     def observe_safety_api(self, uiapp):
         """Observe ALL documents, not only the chosen document or owned scopes."""
-        self.safe = False
-        self.safety_known = False
-        documents = list(uiapp.Application.Documents)
-        for doc in documents:
-            if not doc.IsValidObject or doc.IsModifiable:
-                self.safety_known = True
-                return False
-        self.safe = self.safety_known = True
-        return True
+        try:
+            documents = list(uiapp.Application.Documents)
+            safe = all(doc.IsValidObject and not doc.IsModifiable for doc in documents)
+        except BaseException:
+            self._host_safety = (False, False)
+            raise
+        # HTTP admission sees the last complete observation, never a transient
+        # half-reset. Execution still performs its own fresh API validation.
+        self._host_safety = (True, safe)
+        return safe
 
     def admit_cached(self, payload):
         self.validate_cached(payload)
-        from .execution_safety import MutationBlockedError
         try:
             self.safety.require_safe()
-        except MutationBlockedError as error:
+        except BaseException as error:
+            # Retained guards can come from a prior module/engine. Class
+            # identity is not a reliable admission contract; any failed guard
+            # check must fail closed before queue visibility/executor entry.
             raise OperationError("host_quarantined", safe_text(error), 503)
-        if not self.safety_known or not self.safe:
+        known, safe = self._host_safety
+        if not known or not safe:
             raise OperationError("host_unsafe", "No known safe API-context host snapshot", 503)
 
     def validate_api(self, payload, uiapp):
@@ -328,6 +331,22 @@ class NativeExecutionAdapter(object):
                                         uidoc.Document if uidoc is not None else None)
 
 
+def _require_exclusion_receipt(receipt):
+    """Trusted composition assertion, not a security/proof token.
+
+    The honest composition owner supplies the actual guarded startup receipt;
+    this plain dictionary cannot authenticate excluded handlers by itself.
+    """
+    from .routing_policy import ROUTES
+    required = set(path for path in ROUTES if not path.startswith("/operations/"))
+    required.discard("/get_view/")
+    required.update(("/get_view/<view_name>", "/metadata/refresh/"))
+    if (not receipt or receipt.get("legacy_api_excluded") is not True or
+            receipt.get("private_runtime_reload_guard") is not True or
+            required - set(receipt.get("excluded_routes", []))):
+        raise ValueError("Enabled private lane requires complete request-only legacy exclusion and reload guard receipt")
+
+
 def _build_runtime_in_api_context(registry, uiapp, execute_payload, store=None,
                                  experimental=False, exclusive=False, owner_state=None,
                                  output_limit_chars=1000000, exclusion_receipt=None):
@@ -342,15 +361,8 @@ def _build_runtime_in_api_context(registry, uiapp, execute_payload, store=None,
     # The composition owner retains this SAME map/safety/lock across engine reload.
     # Refuse to synthesize a private guard or competing lane for an enabled host.
     if experimental and exclusive:
-        from .routing_policy import ROUTES
         from .target_routing import get_process_safety
-        required = set(path for path in ROUTES if not path.startswith("/operations/"))
-        required.discard("/get_view/")
-        required.update(("/get_view/<view_name>", "/metadata/refresh/"))
-        if (not exclusion_receipt or exclusion_receipt.get("legacy_api_excluded") is not True or
-                exclusion_receipt.get("private_runtime_reload_guard") is not True or
-                required - set(exclusion_receipt.get("excluded_routes", []))):
-            raise ValueError("Enabled private lane requires complete request-only legacy exclusion and reload guard receipt")
+        _require_exclusion_receipt(exclusion_receipt)
         retained = get_process_owner_state()
         if owner_state is None:
             owner_state = retained
@@ -402,14 +414,7 @@ def build_runtime_in_api_context(registry, uiapp, execute_payload, store=None,
     """
     if experimental and exclusive:
         # Validate composition evidence before allocating native retained state.
-        from .routing_policy import ROUTES
-        required = set(path for path in ROUTES if not path.startswith("/operations/"))
-        required.discard("/get_view/")
-        required.update(("/get_view/<view_name>", "/metadata/refresh/"))
-        if (not exclusion_receipt or exclusion_receipt.get("legacy_api_excluded") is not True or
-                exclusion_receipt.get("private_runtime_reload_guard") is not True or
-                required - set(exclusion_receipt.get("excluded_routes", []))):
-            raise ValueError("Enabled private lane requires complete request-only legacy exclusion and reload guard receipt")
+        _require_exclusion_receipt(exclusion_receipt)
         from .target_routing import startup_owner_guard
         get_process_owner_state()
         with startup_owner_guard():

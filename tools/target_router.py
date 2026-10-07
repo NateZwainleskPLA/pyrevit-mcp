@@ -4,13 +4,14 @@ import httpx
 from dataclasses import replace
 
 from revit_mcp.routing_policy import MUTATION_ROUTES, ROUTES, RoutingPolicyError, route_policy
+from revit_mcp.identity import IdentityError
 from .revit_transport import RevitTransportResult, request_revit
 
 
 def _revalidation_failure(error):
     """Preserve handshake evidence; the directed execution request was not sent."""
     try:
-        request = error.request
+        request = getattr(error, "request", None)
     except RuntimeError:  # Injected failures may not carry a Request.
         request = None
     response = getattr(error, "response", None)
@@ -43,7 +44,13 @@ class TargetRouter:
         # stay independent, and HTTP execution happens outside this lock.
         lock = self._locks.setdefault(target, anyio.Lock())
         async with lock:
-            await self.directory.revalidate(target, self.handshake)
+            try:
+                await self.directory.revalidate(target, self.handshake)
+            except IdentityError:
+                raise  # Expired/crossed identity must retain its precise code.
+            except (httpx.HTTPError, OSError, ValueError) as error:
+                raise IdentityError("target_unreachable",
+                    "Target verification failed before delivery: {}".format(str(error) or type(error).__name__)) from error
             return self.directory.resolve(target, document)
 
     async def call(self, method, endpoint, *, target, document=None, data=None,
@@ -57,16 +64,21 @@ class TargetRouter:
             raise RoutingPolicyError("unexpected_document", "Application execution does not accept a document handle")
         if type(allow_ui_change) is not bool:
             raise RoutingPolicyError("invalid_ui_permission", "allow_ui_change must be a boolean")
-        operation_values = params if method.upper() == "GET" else data
-        if endpoint.startswith("/operations/") and operation_values is not None and not isinstance(operation_values, dict):
-            raise RoutingPolicyError("invalid_request", "Operation request fields must be a JSON object")
-        expected_operation = (operation_values or {}).get("operation_id") if endpoint.startswith("/operations/") else None
-        if endpoint.startswith("/operations/") and (not isinstance(expected_operation, str) or not expected_operation.strip()):
-            raise RoutingPolicyError("missing_operation_id", "An explicit nonempty operation ID is required")
+        expected_operation = None
+        if endpoint.startswith("/operations/"):
+            if method.upper() != "POST" or not isinstance(data, dict):
+                raise RoutingPolicyError("missing_operation", "Operations require POST with a nonempty operation_id in the JSON body")
+            expected_operation = data.get("operation_id")
+            if not isinstance(expected_operation, str) or not expected_operation.strip():
+                raise RoutingPolicyError("missing_operation", "An explicit nonempty operation ID is required")
         try:
             resolved = await self.resolve(target, document)
-        except httpx.HTTPError as error:
-            return _revalidation_failure(error)
+        except IdentityError as error:
+            if error.code != "target_unreachable" or error.__cause__ is None:
+                raise
+            # Direct resolve callers get a typed identity failure. The call seam
+            # retains structured handshake evidence for MCP/CLI/operations.
+            return _revalidation_failure(error.__cause__)
         identities = {key: resolved[key] for key in ("instance_id", "runtime_id")}
         if document is not None:
             identities["document_id"] = resolved["document_id"]

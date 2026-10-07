@@ -148,6 +148,8 @@ class TargetedAPI(object):
                     doc, uidoc, actual = validate_api_context(registry, endpoint, payload, uiapp)
                     if endpoint in MUTATION_ROUTES and self.safety is not None:
                         try:
+                            if self.safety.snapshot()["blocked"]:
+                                raise MutationBlockedError("Mutations are blocked by the retained safety guard")
                             self.safety.require_safe()
                         except Exception as error:
                             # A process-retained guard can belong to a previous

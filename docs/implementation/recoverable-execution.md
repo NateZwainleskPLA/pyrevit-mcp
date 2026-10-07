@@ -60,6 +60,9 @@ active/pending callbacks. A pending callback must drain before disposal.
 Expiry does not overwrite the state of an already-running callback: it requests
 cooperative cancellation and still allows its eventual outcome/effects to be
 archived. The expired runtime cannot serve that receipt as a live endpoint.
+Running/waiting receipts carry `generation_expired=true`; provably unentered
+queued work is canceled with no effects and journaled. A normal stop does not
+latch the shared safety guard when the active callback can finalize safely.
 
 `build_runtime_in_api_context(registry, uiapp, execute_payload, ...)` is the
 composition seam; it installs no routes or startup changes itself. The adapter
@@ -81,6 +84,12 @@ are integrated. The factory primes retained ownership and holds the actual
 `startup_owner_guard()` through private construction, and requires the receipt
 marker. Tests consume the actual guarded startup receipt, create an inert event,
 and verify subsequent synchronous reload fails before identity/route changes.
+This is a TRUSTED COMPOSITION/HONEST CALLER contract: a plain exclusion receipt
+is not a security/proof token. The caller must supply the actual guarded startup
+receipt after establishing all handler exclusions; the factory cannot authenticate
+that assertion. The real startup owner guard, SAME retained safety and lease
+checks are enforced independently. Guard exceptions from prior module/engine
+classes still fail cached admission closed with known no new effects.
 
 Stream capture has a trusted configurable retained-character limit during
 execution. Receipt truncation preserves structured errors, script location,
@@ -111,6 +120,15 @@ previous receipt first. Native Windows/IronPython replacement and controller
 crash durability still require testing; this is a local receipt guarantee, not
 an exactly-once execution guarantee or protection from storage loss.
 
+Known pre-write journal capacity/size rejection is `JournalCapacityError` (503)
+and does not latch durability uncertainty or poison other admitted work. An
+unrecorded result reports `durability=not_recorded`; actual storage I/O failure
+remains `uncertain` and blocks further work as below. Construction requires the
+journal record limit to cover the configured result limit plus a 32 KiB reserve
+for identity, events and diagnostics; oversized admission metadata is rejected
+before queue publication. This prevents a valid configured result from silently
+consuming journal-envelope space.
+
 Failed admission writes reject execution. Failed start writes prevent executor
 entry. Failures after work begins retain in-memory effects/results with
 `durability=uncertain`, and the store blocks new/queued work. A duplicate can
@@ -127,13 +145,30 @@ would need an independent archive identity contract. Terminal output retention
 prunes to hash tombstones; bounded archive capacity rejects admission rather
 than deleting uncertain work or permitting ID reuse. Provision a private
 extension-owned directory and one journal writer; concurrent processes must
-not share its ownership.
+not share its ownership. On capacity pressure the journal performs a bounded
+scan and reclaims only known terminal receipts from OTHER runtime generations
+whose completion is older than `archive_retention_seconds` (seven days by
+default). Current-runtime tombstones, unfinished admissions and unknown-effects
+records are never automatically removed. If those protected records fill the
+archive, admission is rejected without quarantining the host; an operator must
+reconcile and archive/remove that evidence explicitly while the journal writer
+is stopped. Disk/controller-loss durability still requires native validation.
+Recent files are skipped by disk mtime before JSON parsing; scans are throttled
+by `archive_scan_interval_seconds` (60 seconds by default). Retaining a receipt
+rewritten recently is conservative. Repeated capacity rejection therefore does
+not reparse every large retained record under the store lock.
+
+Restart recovery deliberately keeps even admission-only records uncertain.
+Saved receipts alone do not establish native storage/restore history; no replay
+or effects precision is inferred from a possibly restored/stale file. This is
+the conservative optional F5 disposition from the Opus PR8 review, distinct
+from the proven in-process queued cancellation at orderly stop above.
 
 Outstanding integration/native checks
 -------------------------------------
 
 The Origin publication branch `pr/recoverable-operations` is based on completed
-`pr/explicit-target-routing` at `e1fb74b876fafeecff11cae4ac8b6d9c1af29b25`
+`pr/explicit-target-routing` at `fabc191ce369f39cdec31659c5d0448bf5fcc8ec`
 ([routing PR #7](https://github.com/NateZwainleskPLA/pyrevit-mcp/pull/7)). It
 inherits that branch's canonical transport, status, identity and execution
 foundations, including launch/file tools and startup ownership guards. Merge
@@ -164,38 +199,17 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
 
 - Completed identity, routing, transport and execution-foundation commits are
   integrated; tests exercise their real modules with inert Revit doubles.
-- Adoption of execution-foundation review fixes is pending the owner's completed
-  local contract and commit for each remaining correction. Opus PR #3 report `f0bbb53`
-  (`docs/reviews/opus-pr-3.md` in `review-opus-pr-3`) reports F1 closed helper
-  documents falsely marking settled owned work unsafe/unknown, F2 Python wrapper
-  identity misparenting scopes across group rollback, F3 UI facade gating and
-  supplied-document binding errors, and F4/F5 stream compatibility failures.
-  Operations must reconcile F1 before adopting those fixes: a successfully
-  closed non-selected helper document with all owned scopes settled must not
-  falsely quarantine the process. Selected-document loss, pending/unresolved
-  scopes and unknown raw effects still require conservative handling. Integration
-  must also preserve wrapper-equivalent parenting and rollback receipts (F2),
-  exact supplied-document/UI binding in the adapter (F3), and the same retained
-  process safety instance across every mutation path. Do not reset safety to
-  accommodate these fixes. The report's 147 unit and four reproduction tests
-  use doubles/source and provide no native workflow proof. Completed correction
-  `8591295fdea4400081e304d07c1d3990f2c46201` is integrated locally on
-  `fix/recoverable-operations-review` as `2e4e8f8`, addressing F1/F2 without
-  changing service signatures. `document_notes: [{stage: 'document_closed'}]`
-  is informational for a closed non-selected helper with no active owned scope.
-  Operations regressions exercise settled helper commit/rollback followed by
-  load/close and another admission, equivalent-wrapper group rollback, selected
-  document loss and a closed helper with a pending scope. The same safety
-  instance is retained; no adapter changes or safety reset were necessary.
-  Completed F3 correction `85a6a193c7e2102fd080c45f8dcc5e2037100b3c` is
-  integrated in the same isolated branch as `40706f9`. Adapter regressions
-  confirm inactive selected-document defaults for the untracked pyRevit
-  Transaction/TransactionGroup conveniences, withheld UI getters, explicit
-  supplied-UIDocument view updates, and rejected view assignment without UI
-  permission. No host-active fallback or operations adapter change is needed.
-  F4/F5 remain pending their own completed corrections. No unfinished fix branch
-  is imported, no remote ref changed, and native Equals/Close/Pending/UI behavior
-  remains unproven by these inert tests.
+- Canonical execution corrections `8591295`, `85a6a19` and `deba1b68` are
+  inherited through the updated routing parent, along with identity `396e8cb`,
+  status `e6de407` and transport `223375d`. Isolated equivalent dependency
+  replays were not published. Operations regressions accept settled closed
+  non-selected helpers without resetting shared safety, preserve equivalent
+  wrapper group rollback, and reject selected loss or unresolved pending work.
+  They also cover exact inactive-document/UI binding: untracked convenience
+  transactions default to the supplied document, withheld views stay withheld,
+  and opted-in view changes use the supplied UIDocument. Default capture is one
+  bounded journal; native storage, wrapper Equals, Close, Pending and UI behavior
+  remain unproven by doubles. No host-active fallback is introduced.
 - Startup/private-lease composition and the exclusion receipt are integrated;
   native cross-engine retained-object behavior and accepted-worker draining
   remain unproven. There is no automatic/default private-mode registration.
@@ -204,7 +218,7 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
   a policy fixed per subscription requires detach/reattach for each operation
   and resets its receipt sequence; sequence ranges alone cannot uniquely
   correlate receipts across operations. The dialog owner supplied completed
-  local correction `2c5790ab4a053217385c1340becacc5e7c59c029` (unpublished):
+  published correction `2c5790ab4a053217385c1340becacc5e7c59c029`:
   `DialogSubscription.set_policy(policy, scope_token=None)` returns the prior
   policy and increments generation without attaching, detaching or enabling;
   `scoped_policy(...)` restores prior policy/token in finally. A caller-owned
@@ -222,6 +236,9 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
   `befc39797c65affbc671ea4d411f34dd9d11ab75` follows `2c5790ab` and is likewise
   recorded without consumer integration. Future adoption must apply those two
   completed corrections in order with their completed dialog prerequisites.
+  Canonical dialog head `ae106c430d166536e463eaa1f053812ce755cc65` additionally
+  disables policy on conflicting/stale scope restoration. These modules remain
+  optional and are not imported merely to publish operations fixes.
   `collect_loaded_runtime_metadata(application, runtime_snapshot,
   loaded_build=None, pyrevit_version=None, modules=None, extra_paths=())`
   performs no file I/O in API context. It captures primitive module paths and

@@ -1,0 +1,83 @@
+# Operations PR8 review corrections
+
+Original scoped review: `147f432ac17caf133ae26e6ad2dbcfad43fc99fd` on
+`review/opus-pr-8`, pinned routing base `e1fb74b` to operations head `c2b0ef3`.
+Verdict was changes requested. The original reproduction tests assert defective
+behavior; `tests/unit/test_operation_review_regressions.py` instead asserts the
+corrected behavior using actual registry, journal, runner and shared safety
+objects with inert host doubles. No native acceptance is implied.
+
+- **F1 resolved.** Generation expiry leaves callback-owned running/waiting
+  records finalizable, marks their generation expired and cancels queued work
+  with no effects. Completion is still journaled after orderly stop. Runtime
+  regressions call `stop()` during the callback, check both active states,
+  preserve committed effects and require that the SAME shared safety object
+  remains safe. Expired live inspection still fails; archived inspection remains
+  local. This extends the independent stop fix `1be1fb9` rather than replacing
+  known outcomes with a fictitious restart.
+- **F2 resolved.** Pre-write record/capacity limits raise `JournalCapacityError`
+  and reject admission without a durability latch. Other running and queued
+  work completes normally. Actual temp-write/replace/sync failures retain the
+  existing uncertainty/blocking semantics. Capacity-pressure reclamation is
+  bounded and only removes known terminal, other-generation receipts older
+  than seven days (configurable). Unknown effects, unfinished records and
+  current-generation dedup tombstones survive. Protected evidence can still
+  fill the archive; admission then rejects safely until explicit operator
+  reconciliation while the writer is stopped.
+- **F3 resolved.** Host observation computes locally, then publishes one
+  `(known, safe)` tuple. HTTP admission sees the last complete observation
+  during a healthy scan; enumeration failure publishes unknown/unsafe before
+  propagating. API execution always revalidates freshly. Deterministic blocked
+  iterator and failure cases cover both behaviors.
+- **F4 resolved.** Store construction rejects a journal limit smaller than the
+  result limit plus a 32 KiB envelope reserve. Admission bounds primitive
+  identity metadata to one quarter of that reserve, leaving room for events,
+  expiry/cancellation flags and bounded journal diagnostics. Boundary tests
+  verify successful truncated completion and early rejection without disk work.
+- **F5 optional, retained conservative behavior.** Restart load continues to
+  report unfinished records as unknown, including admission-only records. A
+  stale/restored file cannot prove native storage history; recovery never replays
+  it. This is documented deliberately. Orderly in-process shutdown now reports
+  provably queued work precisely as canceled/none. Reviewer agreement on this
+  optional disposition was explicitly agreed by the reviewer in `45fe7dec`.
+- **F6 maintainability resolved; schema enhancement deferred.** Both factory
+  layers use one exclusion-receipt validator/required-route calculation. A
+  future unforgeable composition receipt belongs to the routing owner and is
+  not introduced as another identity or registration schema. The receipt is
+  an integration assertion; the real startup guard and retained lease remain
+  mandatory, and listener/native evidence still gates adoption.
+- **C1 resolved.** Cached admission handles failed checks from a prior module's
+  retained guard without depending on imported exception-class identity. The
+  SAME guard is retained and never reset. A foreign-module guard regression
+  confirms HTTP 503 `host_quarantined`, `admitted=false`, and no queue/event
+  entry. Submit errors never overwrite historical operation effects.
+- **C2 explicitly scoped to trusted, honest composition.** The exclusion receipt
+  is a plain caller-provided assertion, not an authenticated proof/security
+  token. The trusted composition owner must supply the actual guarded startup
+  receipt and establish all request-only exclusions. Startup owner guard,
+  retained safety identity and one-owner lease enforcement still apply; this
+  PR does not claim to resist a caller fabricating the receipt. No additional
+  identity/owner schema or default/private activation is introduced.
+- **Follow-up N1 resolved.** A rejected submit says `admitted=false` and omits
+  effects. That describes this request without contradicting a previously
+  committed operation under the same ID. Regressions cover payload conflict,
+  closed document, stopped runtime and foreign runtime after known completion.
+- **Follow-up N2 resolved.** Capacity scans skip recent files by mtime before
+  parsing and are throttled to at most once per configured 60-second interval.
+  Protected old records are parsed once across repeated rejections, not on every
+  request; eligible archives are reconsidered after the interval. Recent files
+  require no JSON parsing. This keeps retention conservative while avoiding
+  repeated large-record reads under the store lock.
+
+Final publication must use the UPDATED canonical Origin routing parent and
+inherit its published identity/transport/execution corrections. Only owned
+operation corrections, tests and documentation are replayed; isolated copies
+of foundation patches are test evidence, not publication history. Original
+build refs and peer worktrees remain untouched. Deployed integration checkout,
+Revit sessions/models, add-in settings and shared safety state are not changed.
+
+Native pending: callback thread/engine/accepted-worker lifetime, real transaction
+effects/UI, and journal durability. The installed pyRevit evidence in the review
+was IronPython 3.4.2, using `os.replace`/`os.fsync`; the compatibility fallback
+for older IronPython is not proof of that native path. No disposable native
+fixture was supplied.

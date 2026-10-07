@@ -71,9 +71,10 @@ async def test_get_conveys_full_identities_and_does_not_mutate_input():
 
 
 async def test_failed_handshake_never_sends_or_retries_mutation():
+    from revit_mcp.identity import IdentityError
     request = AsyncMock()
-    router = TargetRouter(Directory(), AsyncMock(side_effect=ValueError("port reused")), request)
-    with pytest.raises(ValueError, match="port reused"):
+    router = TargetRouter(Directory(), AsyncMock(side_effect=IdentityError("stale_target", "port reused")), request)
+    with pytest.raises(IdentityError, match="port reused"):
         await router.call("POST", "/execute_code/", target="r1", document="d1")
     request.assert_not_awaited()
 
