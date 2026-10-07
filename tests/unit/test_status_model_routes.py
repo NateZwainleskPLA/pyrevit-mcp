@@ -174,6 +174,8 @@ async def test_launch_liveness_bypasses_pending_document_dispatch(registered_rou
     import time
     from unittest.mock import AsyncMock
     from tools.launch_tools import _wait_for_revit_ready
+    from tools.revit_transport import RevitTransportResult
+    from tools.utils import compatibility_response
 
     timestamps = iter([0, 0, 0, 10])
     monkeypatch.setattr(time, "time", lambda: next(timestamps, 10))
@@ -186,7 +188,11 @@ async def test_launch_liveness_bypasses_pending_document_dispatch(registered_rou
         handler = registered_routes.api.handlers[(path, ("GET",))]
         if "doc" in inspect.signature(handler).parameters:
             return "Error: Request timed out waiting for Revit API context"
-        return handler()["data"]
+        response = handler()
+        return compatibility_response(RevitTransportResult(
+            method="GET", url="http://fixture.invalid" + path,
+            status_code=response["status"], body=response["data"], json_received=True,
+        ))
 
     ready, response = await _wait_for_revit_ready(dispatch, ctx=None, timeout=1)
     assert ready is True

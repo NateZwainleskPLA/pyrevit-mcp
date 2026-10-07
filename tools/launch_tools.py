@@ -118,6 +118,8 @@ async def _wait_for_revit_ready(revit_get, ctx, timeout, poll_interval=5):
     This establishes listener availability, not document/API execution readiness.
     Avoid /status/: its document-context dispatch can wait behind a modal dialog
     and remain pending after a client timeout. A timeout is not proof of liveness.
+    Requires received HTTP 200 JSON identifying the connector as alive. This
+    check does not validate a launched process's identity or document state.
     """
     import time
 
@@ -132,13 +134,12 @@ async def _wait_for_revit_ready(revit_get, ctx, timeout, poll_interval=5):
             )
         try:
             response = await revit_get("/health/", ctx=None, timeout=5.0)
-            # Any valid response (dict or error string from a real HTTP response)
-            # means pyRevit Routes is active
-            if isinstance(response, dict):
+            result = getattr(response, "transport_result", None)
+            if (result is not None and result.status_code == 200 and result.json_received and
+                    isinstance(result.body, dict) and not result.revit_error and
+                    result.body.get("api_name") == "revit_mcp" and
+                    result.body.get("status") == "alive"):
                 return True, response
-            # A string starting with "Error: 5" means HTTP 5xx — server is up
-            if isinstance(response, str) and response.startswith("Error: 5"):
-                return True, {"status": "active_no_document"}
         except Exception:
             pass
         await anyio.sleep(poll_interval)
