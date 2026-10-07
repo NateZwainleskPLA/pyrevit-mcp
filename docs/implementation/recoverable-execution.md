@@ -164,6 +164,18 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
 - Startup/private-lease composition and the exclusion receipt are integrated;
   native cross-engine retained-object behavior and accepted-worker draining
   remain unproven. There is no automatic/default private-mode registration.
+- Dialog-policy integration remains pending. The shared Opus PR #4 review
+  (`cc6a1a9`, `docs/reviews/opus-pr-4.md` on `review-opus-pr-4`) identifies that
+  a policy fixed per subscription requires detach/reattach for each operation
+  and resets its receipt sequence; sequence ranges alone cannot uniquely
+  correlate receipts across operations. Before adding consumer hooks, obtain
+  the dialog owner's completed local contract and commit for retained-delegate
+  policy swap with finally restoration, monotonic receipt sequence and policy
+  generation, or an explicit statement that this gap remains unresolved.
+  Future integration still requires explicit per-operation opt-in after full
+  target/document validation, a serialized owner scope, receipt correlation
+  and a policy-sensitive admission hash. This dependency note enables no
+  native dialog registration, supported catalog entries or default integration.
 - Demonstrate request-only legacy exclusion, accepted-worker draining and the
   one-owner lease in a fresh disposable native initialization. Do not switch an
   already-serving host by calling register_routes again: queued legacy workers
