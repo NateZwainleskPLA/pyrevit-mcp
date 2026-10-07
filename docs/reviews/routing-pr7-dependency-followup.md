@@ -5,9 +5,9 @@ Recorded October 7, 2026. This supersedes the historical dependency notes in
 completed corrections to Origin PR #7. The original Opus report is now complete:
 **approve after fixes**, against pinned `e0b5cd6..e1fb74b`, with 328 passing tests,
 15 native skips and eight repros asserting defective behavior. All six findings
-are owner-resolved below. Focused confirmation of corrected candidate `bdf4b18`
-has been requested in the same ordinary reviewer thread; no reapproval or native
-acceptance is claimed until that confirmation arrives.
+are independently confirmed fixed in immutable candidate `bdf4b18` by the same
+ordinary reviewer thread. No remaining objections to the six findings were
+reported; native acceptance is not implied.
 
 ## Canonical dependencies consumed
 
@@ -140,16 +140,35 @@ composition cases and 26 identity review cases also passed together. Controlled
 doubles and Python 3 compilation do not establish native/IronPython behavior.
 
 PR #7 keeps base `pr/routing-foundations` and native GH-Stacks lineage to PR #8.
-The follow-up is not yet pushed. Base/head will publish together after corrected
-candidate confirmation and final checks; pushing only the base would distort the child
-diff. No peer-ref rewrite, duplicate prerequisite replay or proposal import is
-needed. Original build refs remain intact.
+The standing user authorization permits publishing completed own corrections.
+Base/head publish together after final checks; pushing only the base would
+distort the child diff. No peer-ref rewrite, duplicate prerequisite replay or
+proposal import is needed. Original build refs remain intact.
 
 Shared C2 is an honest-caller composition contract: the exclusion receipt is a
 primitive dictionary, not an unforgeable security proof. Production composition
 must supply the real guarded startup receipt. The startup owner lock and retained
 factory lease enforce exclusion; routing adds no competing receipt/owner schema.
 Shared prior-engine operations exception handling remains operations-owned.
+
+## Independent corrected-candidate confirmation
+
+The existing Opus reviewer inspected a read-only `git archive` of
+`bdf4b18aa6d9e77f7b08ceedf3669e0655d8def6`, verified imports from that extraction,
+and reported **all six findings fixed, no remaining objections**. Its full suite
+passed 481 tests with 15 native skips; compileall and the candidate diff check
+passed. All eight original defective-behavior repros failed as expected; ten new
+positive confirmation tests passed. These confirm typed/chained resolution,
+structured 503/no-delivery evidence, unaltered stale identities, MCP/file/CLI
+results, prior-engine guard rejection, POST/ID admission, foreign receipt
+rejection, route-aware ambiguity and corrected descriptions/messages.
+
+Evidence is in the review thread's `docs/reviews/opus-pr-7.md` and
+`docs/reviews/opus-pr-7-repro/test_confirm_bdf4b18.py`. Later canonical-parent
+and honest-caller/review-state documentation commits leave production/tests
+byte-identical to the confirmed candidate. The reviewer explicitly did not
+review the canonical foundation composition as a new diff, and C1-C3 remain
+coordinator/owner contracts. No broader approval is inferred.
 
 No disposable fixture was supplied. Native threading, UI, CLR lifetime,
 listener reload/disposal and launch remain pending. Historical native tests
