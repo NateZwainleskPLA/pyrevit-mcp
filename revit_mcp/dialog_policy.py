@@ -7,6 +7,7 @@ module neither resolves targets/documents nor owns execution/operation states.
 Compatible with IronPython 2.7 and CPython for offline tests.
 """
 import copy
+from contextlib import contextmanager
 import threading
 import time
 
@@ -19,9 +20,10 @@ except NameError:
 
 _EVENT_TYPES = (
     "Autodesk.Revit.UI.Events.DialogBoxShowingEventArgs",
-    "Autodesk.Revit.UI.Events.MessageBoxShowingEventArgs",
     "Autodesk.Revit.UI.Events.TaskDialogShowingEventArgs",
 )
+# Standard message boxes have an empty DialogId and cannot be cataloged.
+# TaskDialogs without an explicit ID are likewise observation-only.
 _STATE_KEY = "revit_mcp.dialog_policy.subscription"
 
 
@@ -136,6 +138,11 @@ class DialogSubscription(object):
                 or not 1 <= receipt_limit <= 4096):
             raise ValueError("receipt_limit must be between 1 and 4096")
         self._policy = policy
+        # Anchor validated classes in the retained instance, not module globals:
+        # restoring a previous policy must still work after module reinitializes.
+        self._policy_classes = [DialogPolicy]
+        self._policy_generation = 0
+        self._scope_token = None
         self._build = revit_build
         self._attach = attach
         self._detach = detach
@@ -163,10 +170,53 @@ class DialogSubscription(object):
                 self._detach(self._handler)
                 self._attached = False
 
+    def set_policy(self, policy, scope_token=None):
+        """Swap validated policy, increment generation, and return prior policy.
+
+        scope_token is an optional opaque string supplied by the caller. This
+        changes only configuration: it never attaches or reactivates a callback,
+        even on a closed/inactive subscription. Host scopes must be serialized.
+        """
+        with self._lock:
+            if not isinstance(policy, tuple(self._policy_classes) + (DialogPolicy,)):
+                raise ValueError("policy must be a DialogPolicy")
+            if scope_token is not None:
+                _text(scope_token, "scope_token")
+            previous = self._policy
+            if DialogPolicy not in self._policy_classes:
+                self._policy_classes.append(DialogPolicy)
+            self._policy = policy
+            self._scope_token = scope_token
+            self._policy_generation += 1
+            return previous
+
+    def current_sequence(self):
+        """Read the latest event ordinal (including receipts lost during capture)."""
+        with self._lock:
+            return self._sequence
+
+    @contextmanager
+    def scoped_policy(self, policy, scope_token=None):
+        """Restore prior policy/token in finally without changing native hooks.
+
+        Nested scopes must unwind in order; independent overlapping scopes are
+        not supported. Restoration stays inactive if the scope closed the host.
+        """
+        with self._lock:
+            previous_token = self._scope_token
+            previous_policy = self.set_policy(policy, scope_token)
+        try:
+            yield self
+        finally:
+            self.set_policy(previous_policy, previous_token)
+
     def snapshot(self):
         with self._lock:
             return {"attached": self._attached, "active": self._active,
                     "policy": self._policy.snapshot(),
+                    "policy_generation": self._policy_generation,
+                    "scope_token": self._scope_token,
+                    "current_sequence": self._sequence,
                     "dropped_receipts": self._dropped,
                     "receipts": copy.deepcopy(self._receipts)}
 
@@ -176,6 +226,8 @@ class DialogSubscription(object):
         with self._lock:
             receipt = {"dialog_id": None, "event_type": None,
                        "revit_build": self._build, "action": None,
+                       "policy_generation": self._policy_generation,
+                       "scope_token": self._scope_token,
                        "override_attempted": False, "override_accepted": None,
                        "reason": "subscription_inactive", "error": None}
             try:
