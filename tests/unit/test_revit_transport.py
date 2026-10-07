@@ -53,7 +53,7 @@ async def test_valid_non_object_json_is_preserved(body):
 
 
 @pytest.mark.parametrize("status,raw", [(200, b"{broken"), (500, b"<html>failed</html>"),
-                                        (204, b""), (200, b'{"bad":"\xff"}')])
+                                        (200, b'{"bad":"\xff"}')])
 async def test_invalid_json_retains_response_without_claiming_revit_error(status, raw):
     async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda request: httpx.Response(status, content=raw))) as client:
@@ -150,3 +150,71 @@ async def test_recoverable_error_note_is_not_a_revit_exception():
 async def test_unsupported_method_fails_before_delivery():
     with pytest.raises(ValueError, match="GET and POST"):
         await request_revit("DELETE", URL)
+
+
+@pytest.mark.parametrize("url,data,exception_type", [
+    ("http://localhost:abc/revit_mcp/x/", {}, "InvalidURL"),
+    (URL, {"x": object()}, "TypeError"),
+    (URL, {"x": float("nan")}, "ValueError"),
+])
+async def test_invalid_request_build_is_known_pre_delivery(url, data, exception_type):
+    attempts = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: attempts.append(request))) as client:
+        result = await request_revit("POST", url, data=data, client=client)
+    assert result.failure_kind == result.kind == "request_error"
+    assert result.exception_type == exception_type
+    assert not result.mutation_outcome_unknown
+    assert result.status_code is None and not result.json_received
+    assert not attempts
+
+
+@pytest.mark.parametrize("status,raw", [(204, b""), (204, b"\n"), (202, b" \t\r\n"), (200, b"")])
+async def test_empty_success_is_received_acknowledgement_not_effects_evidence(status, raw):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(status, content=raw))) as client:
+        result = await request_revit("POST", URL, data={}, client=client)
+    assert result.kind == "empty_response" and result.http_success
+    assert result.failure_kind is None and not result.json_received
+    assert result.body is None and result.raw_body == raw
+    assert not result.mutation_outcome_unknown  # Receipt delivered, model effects still unreported.
+
+
+@pytest.mark.parametrize("override,expected", [("omitted", 300.0), (7.0, 7.0), (None, None)])
+async def test_injected_client_timeout_is_inherited_unless_explicit(override, expected):
+    seen = []
+
+    def handler(request):
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=300.0) as client:
+        kwargs = {} if override == "omitted" else {"timeout": override}
+        await request_revit("GET", URL, client=client, **kwargs)
+    assert seen[0]["read"] == expected
+
+
+@pytest.mark.parametrize("exc_type,phase,seconds", [
+    (httpx.ReadTimeout, "read", 17.0), (httpx.ConnectTimeout, "connect", 4.0),
+    (httpx.WriteTimeout, "write", 9.0), (httpx.PoolTimeout, "pool", 2.0),
+])
+async def test_timeout_result_records_effective_phase_duration(exc_type, phase, seconds):
+    def handler(request):
+        raise exc_type("controlled timeout", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler),
+                                 timeout=httpx.Timeout(connect=4, read=17, write=9, pool=2)) as client:
+        result = await request_revit("POST", URL, client=client)
+    assert result.timeout_seconds == seconds
+
+
+async def test_injected_redirect_policy_cannot_replay_a_post():
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(307, headers={"Location": URL + "redirected"}, json={"detail": "redirect"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        result = await request_revit("POST", URL, data={"code": "modify model"}, client=client)
+    assert result.status_code == 307 and len(attempts) == 1

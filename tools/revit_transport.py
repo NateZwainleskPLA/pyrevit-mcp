@@ -27,6 +27,7 @@ class RevitTransportResult:
     # Delivery ambiguity only. False does not prove absence of model/file
     # effects; a valid receipt's own state/effects remain authoritative.
     mutation_outcome_unknown: bool = False
+    timeout_seconds: float | None = None
 
     @property
     def http_success(self) -> bool:
@@ -42,6 +43,9 @@ class RevitTransportResult:
         """
         if not self.json_received or not isinstance(self.body, dict):
             return False
+        exception = self.body.get("exception")
+        if isinstance(exception, dict) and "message" in exception:
+            return True
         status = self.body.get("status")
         return (isinstance(status, str) and
                 (status.lower() in {"error", "failed"} or
@@ -56,6 +60,8 @@ class RevitTransportResult:
             return "revit_error"
         if not self.http_success:
             return "http_error"
+        if not self.json_received and not self.raw_body.strip():
+            return "empty_response"
         return "json_response"
 
 
@@ -87,13 +93,15 @@ async def request_revit(
     *,
     data: dict | None = None,
     params: dict | None = None,
-    timeout: float = 30.0,
+    timeout=httpx.USE_CLIENT_DEFAULT,
     client: httpx.AsyncClient | None = None,
 ) -> RevitTransportResult:
     """Send exactly one request to the supplied URL; never retry a mutation.
 
     The caller owns routing/identity validation and operation reconciliation.
     An injected client stays open and must itself be configured without retries.
+    Omitted timeout inherits an injected client's policy; an owned client uses
+    30 seconds. An explicit timeout (including None) overrides that policy.
     Connect/pool failures precede delivery; read/write/disconnect failures can
     follow admission. Unknown outcomes must be inspected, never replayed here.
     """
@@ -101,17 +109,30 @@ async def request_revit(
     if method not in {"GET", "POST"}:
         raise ValueError("Revit transport supports only GET and POST")
     if client is None:
-        async with httpx.AsyncClient(timeout=timeout) as owned_client:
+        owned_timeout = 30.0 if timeout is httpx.USE_CLIENT_DEFAULT else timeout
+        async with httpx.AsyncClient(timeout=owned_timeout) as owned_client:
             return await request_revit(method, url, data=data, params=params,
                                        timeout=timeout, client=owned_client)
 
     try:
-        response = await client.request(method, url, params=params,
-                                        **({"json": data} if method == "POST" else {}),
-                                        timeout=timeout)
+        request = client.build_request(method, url, params=params,
+                                       **({"json": data} if method == "POST" else {}),
+                                       timeout=timeout)
+    except (httpx.InvalidURL, TypeError, ValueError) as exc:
+        return _request_failure(method, url, "request_error", exc, unknown=False)
+
+    try:
+        response = await client.send(request, follow_redirects=False)
     except httpx.TimeoutException as exc:
+        phase = "read"
+        for exception_type, candidate in ((httpx.ConnectTimeout, "connect"),
+                                           (httpx.WriteTimeout, "write"), (httpx.PoolTimeout, "pool")):
+            if isinstance(exc, exception_type):
+                phase = candidate
+                break
         return _request_failure(method, url, "timeout", exc,
-                                unknown=not isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)))
+                                unknown=not isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)),
+                                timeout_seconds=request.extensions.get("timeout", {}).get(phase))
     except httpx.ConnectError as exc:
         return _request_failure(method, url, "connection_error", exc, unknown=False)
     except httpx.RequestError as exc:
@@ -120,6 +141,10 @@ async def request_revit(
     metadata = dict(method=method, url=str(response.url), status_code=response.status_code,
                     headers=tuple(response.headers.multi_items()), raw_body=response.content,
                     response_text=response.text)
+    if 200 <= response.status_code < 300 and not response.content.strip():
+        # A delivered acknowledgement has no transport ambiguity. It supplies
+        # no execution receipt or effects evidence, including for callbacks.
+        return RevitTransportResult(**metadata)
     try:
         body = response.json()
     except (ValueError, UnicodeError) as exc:
@@ -130,9 +155,10 @@ async def request_revit(
     return RevitTransportResult(**metadata, body=body, json_received=True)
 
 
-def _request_failure(method, url, kind, exc, *, unknown):
+def _request_failure(method, url, kind, exc, *, unknown, timeout_seconds=None):
     return RevitTransportResult(
         method=method, url=url, failure_kind=kind,
         error=str(exc) or type(exc).__name__, exception_type=type(exc).__name__,
         mutation_outcome_unknown=method == "POST" and unknown,
+        timeout_seconds=timeout_seconds,
     )
