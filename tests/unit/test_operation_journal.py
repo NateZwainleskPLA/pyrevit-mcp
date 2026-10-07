@@ -159,7 +159,8 @@ def test_stop_during_execution_preserves_final_archived_effects(tmp_path, state,
     archive = dict((receipt["operation_id"], receipt) for receipt in store.journal.load("generation"))
     assert (archive["one"]["state"], archive["one"]["effects"]) == (state, effects)
     assert archive["one"]["result"]["prior_commit"] is True
-    assert archive["queued"]["state"] == "unknown_after_restart"
+    assert (archive["queued"]["state"], archive["queued"]["effects"]) == ("canceled", "none")
+    assert archive["one"]["generation_expired"]
     assert executed == ["one"] and not engine.command_running
     with pytest.raises(OperationError, match="expired"):
         store.inspect("one")

@@ -60,6 +60,9 @@ active/pending callbacks. A pending callback must drain before disposal.
 Expiry does not overwrite the state of an already-running callback: it requests
 cooperative cancellation and still allows its eventual outcome/effects to be
 archived. The expired runtime cannot serve that receipt as a live endpoint.
+Running/waiting receipts carry `generation_expired=true`; provably unentered
+queued work is canceled with no effects and journaled. A normal stop does not
+latch the shared safety guard when the active callback can finalize safely.
 
 `build_runtime_in_api_context(registry, uiapp, execute_payload, ...)` is the
 composition seam; it installs no routes or startup changes itself. The adapter
@@ -111,6 +114,15 @@ previous receipt first. Native Windows/IronPython replacement and controller
 crash durability still require testing; this is a local receipt guarantee, not
 an exactly-once execution guarantee or protection from storage loss.
 
+Known pre-write journal capacity/size rejection is `JournalCapacityError` (503)
+and does not latch durability uncertainty or poison other admitted work. An
+unrecorded result reports `durability=not_recorded`; actual storage I/O failure
+remains `uncertain` and blocks further work as below. Construction requires the
+journal record limit to cover the configured result limit plus a 32 KiB reserve
+for identity, events and diagnostics; oversized admission metadata is rejected
+before queue publication. This prevents a valid configured result from silently
+consuming journal-envelope space.
+
 Failed admission writes reject execution. Failed start writes prevent executor
 entry. Failures after work begins retain in-memory effects/results with
 `durability=uncertain`, and the store blocks new/queued work. A duplicate can
@@ -127,7 +139,20 @@ would need an independent archive identity contract. Terminal output retention
 prunes to hash tombstones; bounded archive capacity rejects admission rather
 than deleting uncertain work or permitting ID reuse. Provision a private
 extension-owned directory and one journal writer; concurrent processes must
-not share its ownership.
+not share its ownership. On capacity pressure the journal performs a bounded
+scan and reclaims only known terminal receipts from OTHER runtime generations
+whose completion is older than `archive_retention_seconds` (seven days by
+default). Current-runtime tombstones, unfinished admissions and unknown-effects
+records are never automatically removed. If those protected records fill the
+archive, admission is rejected without quarantining the host; an operator must
+reconcile and archive/remove that evidence explicitly while the journal writer
+is stopped. Disk/controller-loss durability still requires native validation.
+
+Restart recovery deliberately keeps even admission-only records uncertain.
+Saved receipts alone do not establish native storage/restore history; no replay
+or effects precision is inferred from a possibly restored/stale file. This is
+the conservative optional F5 disposition from the Opus PR8 review, distinct
+from the proven in-process queued cancellation at orderly stop above.
 
 Outstanding integration/native checks
 -------------------------------------
