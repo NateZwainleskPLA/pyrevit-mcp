@@ -141,7 +141,13 @@ class TargetedAPI(object):
                     payload = request_payload(request)
                     doc, uidoc, actual = validate_api_context(registry, endpoint, payload, uiapp)
                     if endpoint in MUTATION_ROUTES and self.safety is not None:
-                        self.safety.require_safe()
+                        try:
+                            self.safety.require_safe()
+                        except Exception as error:
+                            # A process-retained guard can belong to a previous
+                            # engine's module: its exception class is different.
+                            # Any guard rejection is before handler admission.
+                            raise RoutingPolicyError("mutation_blocked", str(error))
                         if doc is not None:
                             try:
                                 modifiable = doc.IsModifiable
