@@ -193,9 +193,18 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
   Transaction/TransactionGroup conveniences, withheld UI getters, explicit
   supplied-UIDocument view updates, and rejected view assignment without UI
   permission. No host-active fallback or operations adapter change is needed.
-  F4/F5 remain pending their own completed corrections. No unfinished fix branch
-  is imported, no remote ref changed, and native Equals/Close/Pending/UI behavior
-  remains unproven by these inert tests.
+  Completed local F4/F5 correction
+  `deba1b68d96b4c09d79b2004386bb0f97f4888a4` is recorded but not imported:
+  capture defaults to one bounded journal, optional sink write/flush failures
+  become first-per-stream/stage cleanup diagnostics without interrupting code,
+  and streams implement writelines/closed/idempotent close/flush/fileno. Service
+  signatures remain compatible except the primitive's default buffer factory is
+  now None. Its canonical publication and reviewer confirmation are pending.
+  Final publication must inherit completed canonical foundations through the
+  updated routing parent, not replay these isolated test-branch dependencies.
+  Transport's completed corrections are published at
+  `d287d4338e1a467c6577d1496e4fd25fa5d6e752`; they likewise belong to that parent.
+  Native Equals/Close/Pending/UI/capture behavior remains unproven by inert tests.
 - Startup/private-lease composition and the exclusion receipt are integrated;
   native cross-engine retained-object behavior and accepted-worker draining
   remain unproven. There is no automatic/default private-mode registration.
