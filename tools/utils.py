@@ -103,7 +103,11 @@ def compatibility_response(result: RevitTransportResult):
 def _format_transport(result):
     if result.failure_kind:
         if result.failure_kind == "timeout":
-            message = "Error: Request timed out."
+            duration = (" after {:g} seconds".format(result.timeout_seconds)
+                        if result.timeout_seconds is not None else "")
+            message = "Error: Request timed out{}.".format(duration)
+        elif result.failure_kind == "request_error":
+            message = "Error: Request could not be built: {}".format(result.error)
         elif result.failure_kind == "connection_error":
             message = "Error: Connection to Revit failed: {}".format(result.error)
         elif result.failure_kind == "invalid_json":
@@ -111,13 +115,15 @@ def _format_transport(result):
         else:
             message = "Error: Transport failure: {}".format(result.error)
         if result.mutation_outcome_unknown:
-            message += (" The mutation outcome is unknown; the operation may still be running in Revit."
-                        " Inspect the original operation before submitting again.")
+            message += (" The request may still be running in Revit."
+                        " If this request changes the model, verify model state before resubmitting.")
         if result.status_code is not None:
             message += "\nHTTP {}\n{}".format(result.status_code, result.response_text)
         return message
 
-    if isinstance(result.body, dict):
+    if result.kind == "empty_response":
+        text = "Empty response received."
+    elif isinstance(result.body, dict):
         text = format_response(result.body)
     else:
         text = json.dumps(result.body, indent=2, ensure_ascii=False)

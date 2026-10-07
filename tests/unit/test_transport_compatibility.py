@@ -103,7 +103,8 @@ async def test_legacy_text_failure_exposes_structured_cause(exc_type, expected, 
     assert isinstance(response, str) and expected in response
     assert response.transport_result.exception_type == exc_type.__name__
     assert response.transport_result.mutation_outcome_unknown == unknown
-    assert ("Inspect the original operation" in format_response(response)) == unknown
+    assert ("If this request changes the model, verify model state before resubmitting" in
+            format_response(response)) == unknown
     assert len(requests) == 1
 
 
@@ -197,3 +198,40 @@ async def test_every_non_2xx_json_result_is_error_prefixed(status, install_http)
     response = await main.revit_get("/status/")
     assert format_response(response).startswith("Error: HTTP {}".format(status))
     assert response.transport_result.body == {"detail": "endpoint response"}
+
+
+async def test_read_only_post_timeout_keeps_duration_without_claiming_mutation(install_http):
+    def handler(request):
+        raise httpx.ReadTimeout("controlled", request=request)
+
+    requests = install_http(handler)
+    response = await main.revit_post("/list_families/", {}, timeout=42.0)
+    text = format_response(response)
+    assert "timed out after 42 seconds" in text
+    assert "If this request changes the model, verify model state before resubmitting" in text
+    assert "mutation outcome" not in text and "Inspect the original operation" not in text
+    assert response.transport_result.timeout_seconds == 42.0 and len(requests) == 1
+
+
+async def test_main_preserves_readable_pre_delivery_build_failure(install_http):
+    requests = install_http(lambda request: httpx.Response(200, json={}))
+    response = await main.revit_post("/execute_code/", {"code": object()})
+    assert isinstance(response, str) and response.startswith("Error:")
+    assert response.transport_result.failure_kind == "request_error"
+    assert not response.transport_result.mutation_outcome_unknown and not requests
+
+
+async def test_empty_acknowledgement_text_does_not_invent_execution_success(install_http):
+    install_http(lambda request: httpx.Response(204, content=b"\n"))
+    response = await main.revit_post("/execute_code/", {})
+    assert "HTTP 204" in response and "Empty response received" in response
+    assert "Error:" not in response and "committed" not in response and "succeeded" not in response
+    assert response.transport_result.kind == "empty_response"
+    assert response.transport_result.body is None and not response.transport_result.json_received
+
+
+@pytest.mark.parametrize("kwargs,expected", [({}, 30.0), ({"timeout": None}, None)])
+async def test_owned_client_keeps_default_timeout_and_explicit_disable(install_http, kwargs, expected):
+    requests = install_http(lambda request: httpx.Response(200, json={}))
+    await request_revit("GET", "http://fixture.invalid/status/", **kwargs)
+    assert requests[0].extensions["timeout"]["read"] == expected
