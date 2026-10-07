@@ -203,3 +203,33 @@ loads. Existing native verification receipts describe the October 6 processes;
 they must not be used as proof that those processes have loaded the October 7
 corrections. Run the read-only verification helper against the new case after
 restarts to obtain new startup receipts and cached identity evidence.
+
+## Application-scoped execution installation
+
+Origin PR #12, implementation commit
+`e40f98a938e61f2599746877ac0c4cfed8d8dd60`, is merged into this integration
+branch at the user's explicit request. The merge is conflict-free. The combined
+suite passes **690 tests**, with the same **15 native tests skipped**; compilation,
+dependency consistency and whitespace checks pass.
+
+The installed MCP client now registers two additional tools:
+`execute_revit_application_code` and `execute_revit_application_script_file`.
+Both require an instance target and accept no document selector. They allow
+opening the first document and continuing within the same callback. Initial
+`doc` and `uidoc` stay `None`; scripts retain the document returned by
+`app.OpenDocumentFile(...)`, or by `uiapp.OpenAndActivateDocument(...)` with
+explicit `allow_ui_change=True`. Document-scoped tools retain their existing
+requirements. See [the application execution contract](application-scoped-execution.md)
+for examples, state/identity checks and native fixture requirements.
+
+Installation uses `--update` on the October 7 correction installation directory
+(`20261007T193946Z`), preserving the existing configuration, original guards and
+target-directory state. The new timestamped manifest records the deployed
+integration commit and an exact backup of the previous dispatcher. Open Revit
+processes must fully restart to load the new route; restarting the MCP client
+refreshes its tool list. Neither restart is forced by the installer.
+
+No live application script or model-opening operation is used as an installation
+probe. Home bootstrap, UI opening and native transaction/failure-processing
+acceptance remain pending an explicitly supplied disposable fixture. The shared
+safety guard remains enforced and is never cleared by installation or reload.
