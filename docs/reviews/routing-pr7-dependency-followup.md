@@ -1,249 +1,128 @@
-# Routing PR #7: legacy readiness dependency follow-up
+# Routing PR #7 review and canonical composition
 
-Recorded October 7, 2026. This is a local-only review note. No remote PR,
-remote publication branch, Revit session or configuration is changed by this follow-up.
-The published routing head remains `e1fb74b876fafeecff11cae4ac8b6d9c1af29b25`.
+Recorded October 7, 2026. This supersedes the historical dependency notes in
+`f40a77f`, `e373a79`, `cda4aeb` and `f5d78c9`. The user now authorizes publishing
+completed corrections to Origin PR #7. Its original Opus review is still
+unfinished because of the provider's account-wide usage cap. Publication awaits
+that required review; no independent reapproval or native acceptance is claimed.
 
-## Dependency findings
+## Canonical dependencies consumed
 
-The coordinator reported that the Opus review of transport PR #2 recommends
-approval after M1 and has no High findings. Its M2 finding identifies a legacy
-launch hazard: dictionary compatibility views can cause foreign HTTP 4xx JSON
-to satisfy a waiter that accepts `isinstance(response, dict)`. The transport
-owner has completed local-only classification using the retained
-`transport_result`, without adding target routing; exact commits are recorded
-below. Report reference supplied by
-the coordinator: `review-opus-pr-2/docs/reviews/opus-pr-2.md`, local `5280c0f`.
-This note does not claim independent review of that report or native acceptance
-of the transport correction.
+Local aggregation `pr/routing-foundations` is
+`30ee4906cd8e76dc91562974d624c10a17ac4431`. It merges actual published canonical
+parents, preserving ancestry instead of duplicating dependency patches:
 
-The status owner separately completed local-only commit
-`2eb54f6bf895e5ee5b8334e76107b764fdfb14da`. It keeps `/status/` in document API
-context and adds a separate `register_liveness_routes(api)` for request-worker
-GET `/health/`. The legacy waiter probes that primitive listener endpoint.
-Neither that status commit nor unfinished transport corrections are imported
-into routing by this follow-up.
+| Origin PR | Canonical head |
+| --- | --- |
+| [Transport #2](https://github.com/NateZwainleskPLA/pyrevit-mcp/pull/2) | `d287d4338e1a467c6577d1496e4fd25fa5d6e752` |
+| [Status #1](https://github.com/NateZwainleskPLA/pyrevit-mcp/pull/1), based on #2 | `2f1ba45fe6a91205f18120c414e6efb6a289f021` |
+| [Identity #5](https://github.com/NateZwainleskPLA/pyrevit-mcp/pull/5), based on #1 | `511b6dc8b46aa8692d283706e03b7b471f1991b2` |
+| [Execution #3](https://github.com/NateZwainleskPLA/pyrevit-mcp/pull/3) | `deba1b68d96b4c09d79b2004386bb0f97f4888a4` |
 
-## Modern routing checks retained
+Foundation original reviews were completed and actionable corrections were
+owner-tested; independent follow-up confirmation remains pending the account
+cap. PR #7's unfinished original review is a separate gate.
 
-The published modern launch implementation already avoids the legacy waiter:
+Historical isolated status composition `72f491968c371923e3c3a973b772611c794c2df0`
+(201 owner-reported tests) includes strict-health reconciliation
+`2885aeb3fc7fcfe03a9ab6acca9a0318547b41f0` (182 tests and an 18-case HTTP matrix).
+Neither replay branch is imported. Canonical status contains the completed
+behavior over its actual transport parent.
 
-- `tools.target_discovery.metadata_handshake` requests cached `/metadata/`,
-  requires HTTP 200, decodes JSON and validates the identity snapshot. Error
-  dictionaries and redirects are not successful metadata handshakes.
-- Launch retains `Popen` and matches a local loopback target to its exact spawned
-  PID, process-start timestamp and requested Revit version.
-- A valid target and initialized document snapshot (`documents_known`) are
-  required; `runtime_available=False` rejects the candidate.
-- Final directory revalidation must preserve full instance/runtime IDs and
-  process lifetime. A superseded generation and an exited child cannot satisfy
-  readiness.
-- Discovery/revalidation is bounded by the launch deadline. Generic HTTP
-  status dictionaries do not establish readiness, and no execution retry or
-  alternative target is selected.
+## Owned corrections to saved review repros
 
-These checks establish verified registration for the launched destination.
-They do not prove modal clearance, current document usability, native execution
-availability, safe listener reload or CLR engine retention.
+Local `3787bb2d704aa8e7149815b20cd1c4b40cfa61c1` addresses four saved PR #7
+repro groups. These are evidence, not a completed formal report:
 
-## Eventual integration requirements
+- **Handshake failures escaped the structured interface.** Connection refusal,
+  timeout and unsuccessful metadata HTTP responses now return
+  `target_revalidation_failed`, preserving available handshake status, body,
+  headers and exception type. The result states that execution was not sent and
+  sets `mutation_outcome_unknown=False`. No directed request, retry or target
+  substitution occurs. Typed identity failures keep their existing fail-closed
+  path.
+- **Operation confirmation could be disabled by request shape.** Missing IDs
+  could accept another operation's receipt; GET inspection ignored its query ID.
+  All operation endpoints now require a nonempty `operation_id` before any
+  handshake/transport. Confirmation reads GET parameters or the POST body and
+  rejects a foreign ID. UUID validation and stored ownership remain operations'
+  responsibility. Inspect/cancel stay runtime-scoped, preserving historical
+  document provenance without requiring a live document.
+- **Read-only POST failures looked like uncertain mutations.** Known queries
+  and inspection clear the delivery-ambiguity mutation flag. Mutations,
+  submission/cancellation and explicitly permitted unknown routes stay
+  conservative. Receiver bodies/effects remain intact. Existing transport
+  failures, including invalid JSON, are not replaced by identity confirmation.
+  A false ambiguity flag does not prove no effects.
+- **A retained prior-engine guard exception had the wrong contract.** Any guard
+  rejection before admission returns HTTP 409 `mutation_blocked`, `effects=none`
+  and actual identity, even if its exception class belongs to a previous module
+  load. The handler never runs and the retained unsafe state is never reset.
 
-When completed dependency corrections are authorized for integration, reconcile
-the legacy startup/launch/test overlaps explicitly. Retain modern metadata
-discovery, exact child matching, initialized snapshot checks and final full-ID
-revalidation. Do not restore dictionary-type acceptance or use `/health/` as
-identity or model execution readiness.
+`test_routing_review_contracts.py` covers these groups through the router, MCP,
+file CLI and receiver, including a separately loaded prior-module safety guard.
 
-Keep `register_status_routes(targeted_api)` registering only `/status/`. Omit
-the legacy raw liveness registrar from targeted/disabled startup. Passing
-`/health/` through `TargetedAPI` currently rejects it as unknown; adding a normal
-policy would give it a real `uiapp` argument and return it to API-context
-dispatch. Any later protected liveness endpoint needs a separately reviewed
-request-only full-instance/runtime-ID guard, not a new identity schema.
+## Composition behavior retained and verified
 
-Status's local health change and transport's local legacy response classification
-must be reconciled together where their legacy waiter hunks overlap. Neither
-correction weakens directed-call identity/document validation or the retained
-private-owner startup exclusion. Until then the published foundation base and
-routing PR remain unchanged.
+`b7609f3` composes canonical status/transport/execution corrections; `385a57c`
+composes canonical identity and actual receiver/execution regression tests.
 
-## Validation and limits
+Targeted and disabled startup retain **strict** `initialize_identity` under
+`startup_owner_guard`, before replacement/expiration. They never call the
+legacy-only degraded initializer. Controlled early/partial failures propagate
+without model/status registration or raw health. Existing retained-owner tests
+reject before identity work and preserve the exact shared guard/lease. Only
+successful guarded disabled startup emits complete exclusion/reload evidence.
 
-The existing launch/discovery regression cases were rerun for this follow-up:
+The aggregation retains legacy health tests for its own legacy composition.
+Routing omits the raw registrar and replaces obsolete legacy waiter tests with
+`test_launch_metadata_transport.py`. Modern launch still uses cached
+`/metadata/`, strict successful snapshot validation, exact spawned child
+PID/start/version, initialized documents and final full-ID revalidation. Its
+real HTTP matrix rejects degraded 503, unrelated JSON, malformed/non-object
+responses and error envelopes. Health liveness is never identity/model readiness.
+
+`test_routing_execution_composition.py` uses the actual registry, receiver and
+`execute_payload` with controlled native doubles. Inactive work and default
+`Transaction`/`TransactionGroup` helpers bind to the requested document. These
+pyRevit helpers remain **untracked**; only execution-owned scopes prove owned
+effects. Gated views/assignment use the supplied eligible UIDocument, never the
+global host UIDocument. Inactive UI work rejects before execution. An unsafe
+result latches the same guard used by subsequent save/execution; queries remain
+available.
+
+Fresh live resolution excludes links even after a previously valid snapshot.
+The additive family descriptor is descriptive: its old/defaulted value cannot
+override resolved native properties or create a blanket family-document ban.
+Identity owns allocation, schema, native comparison and exact delegate cleanup.
+
+## Validation and remaining gates
+
+Existing `.venv` Python, after complete canonical composition:
 
 ```text
-.\.venv\Scripts\python.exe -m pytest tests/unit/test_wait_for_revit.py tests/unit/test_launch_identity.py tests/unit/test_target_discovery.py -q
-26 passed in 0.55s
+.\.venv\Scripts\python.exe -m pytest tests/unit -q -p no:cacheprovider
+446 passed
+.\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
+446 passed, 15 skipped
+.\.venv\Scripts\python.exe -m compileall -q main.py tools scripts revit_mcp
+passed
+git diff --check
+passed
 ```
 
-The diff check passed. These cases cover generic HTTP responses, another process,
-reused lifetime, wrong
-version, remote PID coincidence, uninitialized snapshots, process exit and
-generation changes during final revalidation. Only this note changes; no new
-routing implementation or speculative test is added.
+The aggregation separately passed 354 unit tests. Seven actual execution
+composition cases and 26 identity review cases passed together. Controlled
+doubles and Python 3 compilation do not establish native/IronPython behavior.
 
-No disposable native fixture was supplied. Native modal, API dispatch, listener
-lifetime and actual launch acceptance remain pending. No push, remote PR edit,
-merge or deployment is authorized by this local review follow-up.
+PR #7 keeps base `pr/routing-foundations` and native GH-Stacks lineage to PR #8.
+The follow-up is not yet pushed. Base/head will publish together after the
+original review and final checks; pushing only the base would distort the child
+diff. No peer-ref rewrite, duplicate prerequisite replay or proposal import is
+needed. Original build refs remain intact.
 
-## Pending identity review corrections
-
-The coordinator also reported Opus PR #5 review `f0deafb` requesting changes:
-invalid/wildcard advertised endpoints can abort registration (F1), stale PID
-records can veto a live same-port instance (F2), rejected observations alter
-in-memory verification despite SQL rollback (F3), linked/family document
-classification is incomplete (F4), process timestamps depend on locale (F5),
-and expiration failure can skip delegate cleanup (F6). Report reference supplied
-by the coordinator: `review-opus-pr-5/docs/reviews/opus-pr-5.md`. These are pending
-identity-owner corrections; this note does not claim they are resolved or import
-their implementation.
-
-Routing's later integration must reconcile F1c explicitly. The identity PR's
-legacy-only startup may preserve independent legacy routes when identity is
-unavailable. Targeted and disabled startup must continue requiring full-ID
-validation, with no legacy fallback and no `TargetedAPI` registration of
-`/health/`. Any degraded metadata registrar must stay request-only and cause
-discovery/revalidation to fail, rather than fabricate target identity. Preserve
-`startup_owner_guard` before identity initialization, registration or expiration.
-Current targeted startup propagates identity initialization failures; it does
-not continue into legacy handler registration.
-
-F4 must exclude linked documents during fresh live resolution, not just cached
-discovery. The identity owner owns `TargetRegistry.resolve_document`; routing
-will consume the completed correction rather than add a second registry or
-document schema. Valid family documents should be classified and handled by
-each tool's supported semantics, without an accidental blanket family ban.
-
-The identity owner was asked for the completed local contract/hash, including
-degraded-metadata composition and fresh linked-document resolution. Integration
-waits for that completed dependency. No source rewrite, deployment or remote
-publication is included in this note.
-
-## Completed local transport dependencies
-
-The transport owner supplied completed, unpushed corrections:
-
-- M1 `7be3e3ca753143ba41caae2739d394d82708fbd3`: classify and render native
-  exception envelopes.
-- M2 `ef8639440bdb0f10ec81d3848793198a6fa7991d`: use structured HTTP evidence
-  in the legacy `/status/` waiter. The owner reports 18 focused tests.
-- L1-L4 `f65ca8c5e1832d3b559619fe92dd4a9df0437171`: distinguish pre-delivery
-  request-build errors, expose effective timeout evidence/conditional effects
-  wording, classify received empty acknowledgements without proving effects,
-  and inherit injected-client timeout policy unless explicitly overridden.
-
-The owner reports 166 unit tests for the completed local transport correction
-series, corrected review repro and clean diff. The correction contract is in its
-`docs/implementation/structured-transport-review-corrections.md`. The three
-commits are available dependencies, not applied routing changes.
-
-M2 is legacy-only. It must not replace modern routing's metadata/child lifetime/
-version/snapshot/generation checks. The status owner is reconciling these
-completed transport commits with `2eb54f6` locally in its own checkout on
-`local/status-transport-readiness`. Its `/health/` waiter needs HTTP 200, received
-JSON, `api_name='revit_mcp'` and `status='alive'`; HTTP 503 is not readiness.
-That composition is now complete locally, as recorded below. Even its valid
-health receipt establishes listener liveness only.
-
-No automatic cherry-pick is performed. Future integration must distinguish the
-M1 transport correction from overlapping legacy M2/status hunks, retain modern
-launch unchanged and keep raw `/health/` outside `TargetedAPI`. The published
-routing branch and integration base remain unchanged.
-
-## Pending execution review correction contracts
-
-The coordinator reported Opus execution PR #3 review `f0bbb53`, with 147 unit
-tests and four controlled repro tests. Findings concern a valid
-EditFamily/owned-transaction/LoadFamily/Close workflow falsely becoming unsafe
-(F1), Python wrapper identity losing child/group scope relationships (F2),
-`ScopedRevit` active-view assignment/UI gating and active-document transaction
-defaults (F3), backing-buffer writes aborting scripts (F4), and missing stream
-`writelines`/`closed` behavior (F5). Report reference supplied by the coordinator:
-`review-opus-pr-3/docs/reviews/opus-pr-3.md`. The execution owner is correcting
-these locally on `fix/execution-foundations-review` from published `10ec37d`.
-No unfinished fix is integrated here.
-
-Routing has requested completed hashes and exact facade/context contracts.
-Later composition must verify `ScopedRevit.Transaction` and `TransactionGroup`
-default to the receiver's freshly resolved requested document, including an
-inactive document, rather than a global active-document convenience fallback.
-Active-view assignment and UI accessors must use only the supplied UIDocument
-and respect `allow_ui_change`. Controlled cross-document and gated-property
-regressions are required when composing the completed foundation corrections.
-Any changed execution signatures or owned-document closure/postcondition and
-scope-parenting rules must be reconciled explicitly.
-
-All mutation paths must continue sharing the exact retained process safety
-guard. A failing double/repro does not establish that an existing live host is
-unsafe; it does not authorize clearing/restarting safety or changing deployment.
-No source or native consumer changes are made before the completed contracts.
-
-## Identity-owner progress, not a completed dependency
-
-The identity owner reports local F1/F2/F3/F5/F6 corrections in progress. Its
-chosen F4 contract excludes
-`IsLinked` documents entirely and retains routable family documents with a
-primitive `is_family_document` descriptor. Prior snapshots lacking that field
-default to false. Identity owns the validator/schema change; routing does not
-duplicate it. This compatibility default is not authoritative tool capability:
-the actual resolved native document properties govern per-tool family restrictions.
-Fresh document resolution must apply the linked-document exclusion too.
-Completed hashes/tests are still required before integration. Native
-enumeration/reload proof remains pending.
-
-The coordinator-approved F1c split is planned as strict
-`initialize_identity(api)` plus a separate `initialize_legacy_identity(api)`
-wrapper used only by the identity PR's legacy startup. On failure that wrapper
-invalidates the installed registry and registers request-only `/metadata/` and
-`/metadata/refresh/` returning HTTP 503 with `api_name='revit_mcp'`,
-`runtime_available=False`, `error_code='runtime_unavailable'` and a diagnostic,
-without fabricated instance/runtime/document UUIDs. Independent legacy routes
-can then register in that legacy-only composition. Discovery must reject this
-response; the valid identity metadata schema remains unchanged.
-
-Targeted/disabled routing must continue calling strict `initialize_identity`
-inside `startup_owner_guard`, before any registration or expiration. It must
-never call the legacy wrapper or register raw health through `TargetedAPI`.
-This is a planned dependency contract, not a completed identity correction;
-integration still waits for the owner's finished local hash/tests.
-
-## Completed local status/transport reconciliation
-
-The status owner supplied
-`2885aeb3fc7fcfe03a9ab6acca9a0318547b41f0` on
-`local/status-transport-readiness`, with 182 unit tests and an 18-case real
-MockTransport/request/compatibility/poller matrix. It reconciles the completed
-legacy M2 correction with status `2eb54f6` and replayed transport foundations/M1.
-It does not include unfinished identity or execution work.
-
-The final `/health/` waiter accepts only `response.transport_result` evidence:
-HTTP 200, received JSON, a dictionary body, no `revit_error`,
-`api_name='revit_mcp'` and `status='alive'`. There is no bare-dictionary check,
-HTTP 503 allowance, `Error: 5` string rule or endpoint fallback. Tests reject
-foreign HTTP 200, spoofed 404/500/503, native 408, native errors carrying alive
-fields, malformed/non-object/empty JSON and 202 receipts. The separate raw
-liveness registrar and status API-context dispatch tests remain intact.
-
-If legacy waiter integration is later authorized, preserve this strict health
-predicate and matching fixture/test paths when resolving the overlapping
-status/M2 hunks. Discard connector-503 readiness. Do not import these legacy
-launch hunks over modern `/metadata/` discovery and exact child PID/start/version,
-initialized document snapshot and final full-ID validation. Identity's F1c
-wrapper remains a separate unfinished dependency. Targeted/disabled startup
-continues strict identity initialization under `startup_owner_guard`, without
-raw health registration through `TargetedAPI`.
-
-This completion is recorded, not adopted. Routing source and remote refs are
-unchanged; no push, remote PR edit, deployment or native check is performed.
-
-## Completed execution correction, partial series
-
-Execution owner supplied `8591295fdea4400081e304d07c1d3990f2c46201`, directly
-after canonical PR #3 `10ec37d`, for F1/F2. Context/payload signatures are
-unchanged; `document_notes` records a closed non-selected helper document with
-no active owned scope. Selected-document loss, unresolved scope loss and a
-still-modifiable valid document remain unsafe. Native `Equals`-aware document
-comparison fixes owned group/child parenting. The owner reports 40 focused
-tests. Facade/capture corrections are still forthcoming. Routing awaits those
-completed contracts before consumer composition; no unfinished branch or
-partial correction is imported by this documentation update.
+No disposable fixture was supplied. Native threading, UI, CLR lifetime,
+listener reload/disposal and launch remain pending. Historical native tests
+are skipped; their legacy harness needs adaptation before use. No live session,
+model, setting or endpoint protection changed; no merge/deployment/private
+activation occurred. The flagged `uvx` executable was not invoked.
