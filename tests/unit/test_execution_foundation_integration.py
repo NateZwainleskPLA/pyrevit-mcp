@@ -5,6 +5,7 @@ import pytest
 from tests.unit.test_execution_output import execution_route
 from tests.unit.test_execution_context import FakeDB
 from tests.unit.test_execution_identity_integration import setup
+from tests.unit.test_execution_document_postconditions import AliasDocument
 
 
 @pytest.mark.parametrize("code,state,effects,value", [
@@ -68,3 +69,107 @@ def test_real_capture_is_bounded_during_execution_without_changing_effects(execu
     assert receipt["result"]["output_truncated"]
     assert len(receipt["result"]["output"]) == 10
     assert a.value == 7
+
+
+@pytest.mark.parametrize("rollback,effects", [(False, "committed"), (True, "unknown")])
+def test_settled_closed_helper_does_not_quarantine_operations(execution_route, rollback, effects):
+    execution_route.DB = FakeDB()
+    engine, adapter, reg, uiapp, request, selected, helper = setup(execution_route.execute_payload)
+    selected.value = helper.value = 0
+    selected.EditFamily = lambda: helper
+    loaded_into = []
+    helper.LoadFamily = lambda doc: loaded_into.append(doc)
+
+    def close(save):
+        helper.IsValidObject = False
+        uiapp.Application.Documents.remove(helper)
+
+    helper.Close = close
+    code = "family = doc.EditFamily()\n"
+    if rollback:
+        code += "with execution.rollback_scope(family, 'trial'):\n"
+        indent = "    "
+    else:
+        indent = ""
+    code += (indent + "with execution.transaction(family, 'edit'):\n" +
+             indent + "    family.value = 7\n" +
+             "family.LoadFamily(doc)\nfamily.Close(False)")
+    request["code"] = code
+    safety = adapter.safety
+    engine.submit(request)
+    engine.on_external_event(uiapp)
+    receipt = engine.store.inspect("one")
+    assert (receipt["state"], receipt["effects"]) == ("succeeded", effects)
+    assert loaded_into == [selected]
+    assert receipt["result"]["document_notes"] == [{"stage": "document_closed"}]
+    assert receipt["result"]["cleanup_errors"] == []
+    assert not engine.quarantined and not safety.snapshot()["blocked"]
+    assert adapter.safety is safety
+    assert not engine.command_running
+    # The same lane and guard accept a later operation after fresh snapshot refresh.
+    engine.submit(dict(request, operation_id="next", code="print(doc.Title)"))
+    engine.on_external_event(uiapp)
+    assert engine.store.inspect("next")["state"] == "succeeded"
+    assert adapter.safety is safety and not safety.snapshot()["blocked"]
+
+
+def test_selected_document_loss_still_quarantines_operations(execution_route):
+    execution_route.DB = FakeDB()
+    engine, adapter, reg, uiapp, request, selected, helper = setup(execution_route.execute_payload)
+
+    def close():
+        selected.IsValidObject = False
+        uiapp.Application.Documents.remove(selected)
+        uiapp.ActiveUIDocument = None
+
+    selected.close = close
+    request["code"] = "doc.close()"
+    engine.submit(request)
+    engine.on_external_event(uiapp)
+    receipt = engine.store.inspect("one")
+    assert (receipt["state"], receipt["effects"]) == ("failed", "unknown")
+    assert engine.quarantined and adapter.safety.snapshot()["blocked"]
+    assert not engine.command_running
+
+
+def test_equivalent_wrapper_child_commit_is_rolled_back_in_operation_receipt(execution_route):
+    execution_route.DB = FakeDB()
+    engine, adapter, reg, uiapp, request, selected, helper = setup(execution_route.execute_payload)
+    selected.value = 0
+    selected.alias = AliasDocument(selected)
+    request["code"] = ("with execution.rollback_scope(doc, 'trial'):\n"
+                       "    with execution.transaction(doc.alias, 'edit'):\n"
+                       "        pass")
+    engine.submit(request)
+    engine.on_external_event(uiapp)
+    receipt = engine.store.inspect("one")
+    assert receipt["state"] == "succeeded"
+    assert receipt["effects"] == "unknown"  # Untracked script effects remain unproven.
+    assert receipt["result"]["owned_effects"] == "rolled_back"
+    assert all(item["effect"] == "rolled_back" for item in receipt["result"]["transaction_receipts"])
+    assert not engine.quarantined and not adapter.safety.snapshot()["blocked"]
+
+
+def test_closed_helper_with_pending_scope_still_quarantines_operations(execution_route):
+    execution_route.DB = FakeDB({"commit_status": "Pending"})
+    engine, adapter, reg, uiapp, request, selected, helper = setup(execution_route.execute_payload)
+    selected.helper = helper
+    helper.value = 0
+
+    def close():
+        helper.IsValidObject = False
+        uiapp.Application.Documents.remove(helper)
+
+    helper.close = close
+    request["code"] = ("try:\n"
+                       "    with execution.transaction(doc.helper, 'pending'):\n"
+                       "        doc.helper.value = 7\n"
+                       "except Exception:\n"
+                       "    doc.helper.close()")
+    engine.submit(request)
+    engine.on_external_event(uiapp)
+    receipt = engine.store.inspect("one")
+    assert (receipt["state"], receipt["effects"]) == ("failed", "unknown")
+    assert engine.quarantined and adapter.safety.snapshot()["blocked"]
+    assert not execution_route.DB.created[0].disposed
+    assert not engine.command_running
