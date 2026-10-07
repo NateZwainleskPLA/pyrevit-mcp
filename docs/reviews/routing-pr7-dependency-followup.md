@@ -127,6 +127,15 @@ The transport owner supplied completed, unpushed corrections:
   exception envelopes.
 - M2 `ef8639440bdb0f10ec81d3848793198a6fa7991d`: use structured HTTP evidence
   in the legacy `/status/` waiter. The owner reports 18 focused tests.
+- L1-L4 `f65ca8c5e1832d3b559619fe92dd4a9df0437171`: distinguish pre-delivery
+  request-build errors, expose effective timeout evidence/conditional effects
+  wording, classify received empty acknowledgements without proving effects,
+  and inherit injected-client timeout policy unless explicitly overridden.
+
+The owner reports 166 unit tests for the completed local transport correction
+series, corrected review repro and clean diff. The correction contract is in its
+`docs/implementation/structured-transport-review-corrections.md`. The three
+commits are available dependencies, not applied routing changes.
 
 M2 is legacy-only. It must not replace modern routing's metadata/child lifetime/
 version/snapshot/generation checks. The status owner is reconciling these
@@ -140,3 +149,60 @@ No automatic cherry-pick is performed. Future integration must distinguish the
 M1 transport correction from overlapping legacy M2/status hunks, retain modern
 launch unchanged and keep raw `/health/` outside `TargetedAPI`. The published
 routing branch and integration base remain unchanged.
+
+## Pending execution review correction contracts
+
+The coordinator reported Opus execution PR #3 review `f0bbb53`, with 147 unit
+tests and four controlled repro tests. Findings concern a valid
+EditFamily/owned-transaction/LoadFamily/Close workflow falsely becoming unsafe
+(F1), Python wrapper identity losing child/group scope relationships (F2),
+`ScopedRevit` active-view assignment/UI gating and active-document transaction
+defaults (F3), backing-buffer writes aborting scripts (F4), and missing stream
+`writelines`/`closed` behavior (F5). Report reference supplied by the coordinator:
+`review-opus-pr-3/docs/reviews/opus-pr-3.md`. The execution owner is correcting
+these locally on `fix/execution-foundations-review` from published `10ec37d`.
+No unfinished fix is integrated here.
+
+Routing has requested completed hashes and exact facade/context contracts.
+Later composition must verify `ScopedRevit.Transaction` and `TransactionGroup`
+default to the receiver's freshly resolved requested document, including an
+inactive document, rather than a global active-document convenience fallback.
+Active-view assignment and UI accessors must use only the supplied UIDocument
+and respect `allow_ui_change`. Controlled cross-document and gated-property
+regressions are required when composing the completed foundation corrections.
+Any changed execution signatures or owned-document closure/postcondition and
+scope-parenting rules must be reconciled explicitly.
+
+All mutation paths must continue sharing the exact retained process safety
+guard. A failing double/repro does not establish that an existing live host is
+unsafe; it does not authorize clearing/restarting safety or changing deployment.
+No source or native consumer changes are made before the completed contracts.
+
+## Identity-owner progress, not a completed dependency
+
+The identity owner reports local F1/F2/F3/F5/F6 corrections in progress. Its
+chosen F4 contract excludes
+`IsLinked` documents entirely and retains routable family documents with a
+primitive `is_family_document` descriptor. Prior snapshots lacking that field
+default to false. Identity owns the validator/schema change; routing does not
+duplicate it. This compatibility default is not authoritative tool capability:
+the actual resolved native document properties govern per-tool family restrictions.
+Fresh document resolution must apply the linked-document exclusion too.
+Completed hashes/tests are still required before integration. Native
+enumeration/reload proof remains pending.
+
+The coordinator-approved F1c split is planned as strict
+`initialize_identity(api)` plus a separate `initialize_legacy_identity(api)`
+wrapper used only by the identity PR's legacy startup. On failure that wrapper
+invalidates the installed registry and registers request-only `/metadata/` and
+`/metadata/refresh/` returning HTTP 503 with `api_name='revit_mcp'`,
+`runtime_available=False`, `error_code='runtime_unavailable'` and a diagnostic,
+without fabricated instance/runtime/document UUIDs. Independent legacy routes
+can then register in that legacy-only composition. Discovery must reject this
+response; the valid identity metadata schema remains unchanged.
+
+Targeted/disabled routing must continue calling strict `initialize_identity`
+inside `startup_owner_guard`, before any registration or expiration. It must
+never call the legacy wrapper or register raw health through `TargetedAPI`.
+This is a planned dependency contract, not a completed identity correction;
+integration still waits for the owner's finished local hash/tests.
