@@ -115,8 +115,9 @@ def _build_launch_command(revit_path, file_path=None, language=None):
 async def _wait_for_revit_ready(revit_get, ctx, timeout, poll_interval=5):
     """Poll the pyRevit Routes status endpoint until Revit responds.
 
-    Considers Revit "ready" when the endpoint responds at all (200 or 503),
-    since launching without a file means no active document but Routes is active.
+    Requires a received JSON object with HTTP 200, or a connector-marked HTTP
+    503 (launching without a document can leave the legacy status unhealthy).
+    This transport check does not validate a launched process's identity.
     """
     import time
 
@@ -131,13 +132,12 @@ async def _wait_for_revit_ready(revit_get, ctx, timeout, poll_interval=5):
             )
         try:
             response = await revit_get("/status/", ctx=None, timeout=5.0)
-            # Any valid response (dict or error string from a real HTTP response)
-            # means pyRevit Routes is active
-            if isinstance(response, dict):
+            result = getattr(response, "transport_result", None)
+            if (result is not None and result.json_received and
+                    isinstance(result.body, dict) and not result.revit_error and
+                    (result.status_code == 200 or
+                     (result.status_code == 503 and result.body.get("api_name") == "revit_mcp"))):
                 return True, response
-            # A string starting with "Error: 5" means HTTP 5xx — server is up
-            if isinstance(response, str) and response.startswith("Error: 5"):
-                return True, {"status": "active_no_document"}
         except Exception:
             pass
         await anyio.sleep(poll_interval)
