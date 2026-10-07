@@ -6,7 +6,12 @@ Wire metadata is a raw JSON object at `GET /revit_mcp/metadata/`. It contains
 `revit_version`, `endpoint` (absolute API-root URL, including explicit port),
 `documents`, `documents_known`, `snapshot_at` (UTC epoch seconds or null), and
 `snapshot_age_seconds` (seconds or null). Document descriptors contain exactly
-`document_id`, `title`, `path`, `is_active`. Optional primitive provenance fields
+`document_id`, `title`, `path`, `is_active`, `is_family_document`. Linked documents
+are excluded from snapshots and fresh receiver resolution. Editable family
+documents remain targets, classified by `is_family_document=true`. The validator
+defaults that field to false on older descriptors; it is descriptive only and
+cannot authorize per-tool eligibility. Tool restrictions must examine the freshly
+resolved native document's properties. Optional primitive provenance fields
 are `revit_build`, `engine_version`, `connector_version`, `snapshot_error`.
 `runtime_available=false` rejects discovery of an expired runtime.
 
@@ -45,6 +50,9 @@ the intentionally untargeted exception. The explicit refresh route
 `GET /metadata/refresh/` accepts instance/runtime UUID query parameters and
 requests `uiapp` API-context injection. It is read-only, but can wait behind
 busy or modal Revit work.
+Query-parameter injection into handler keyword arguments is required. The
+supported source baseline for that feature is pyRevit 7.0.0.26254; older builds
+need equivalent injection support and have not been established compatible.
 
 Client directory interface (CPython)
 -----------------------------------
@@ -91,21 +99,52 @@ Native startup and discovery composition
 using pyRevit `serverinfo.register()` for this process's endpoint. It retains only
 the process UUID as JSON in CLR AppDomain process storage; every initialization
 creates a new runtime UUID. Owned CLR event delegates are retained separately
-and removed before replacement. Startup does not activate or change the Routes
+and disabled and removed before replacement. Each exact detachment is attempted
+before expiring the old registry. An expiration error is diagnostic; a detach
+error retains the disabled slot and exact remaining delegates and rejects a
+replacement. Partial subscription failures use the same retained cleanup.
+Process timestamps use the invariant Gregorian culture, independent of the
+Windows locale. Startup does not activate or change the Routes
 listener. It collects once when startup has API context, then collects on
 document open/close, view activation, and throttled Idling API callbacks.
+
+`initialize_identity(api)` remains strict. Targeted/disabled composition must
+invoke its startup ownership guard before calling it, and must propagate failure
+without exposing legacy fallback routes. This PR's legacy-only startup instead
+uses `initialize_legacy_identity(api)`: identity errors expire/clear the installed
+registry and replace both metadata routes with request-only HTTP 503 responses
+`{api_name: "revit_mcp", runtime_available: false, error_code: "runtime_unavailable",
+error: <cached diagnostic>}`. These responses have no UUIDs or document list and
+never establish discovery or readiness. Even a failure after normal metadata
+registration replaces those handlers. Independent legacy route/liveness
+registration remains available. This wrapper is forbidden in targeted or disabled
+composition; `/health/` must never be routed through `TargetedAPI`.
+
+Empty/default and wildcard bind hosts (`""`, `0.0.0.0`, `::`) advertise
+`127.0.0.1`, matching the default IPv4 discovery/listener. An explicitly
+IPv6-only listener must advertise `::1` via `REVIT_MCP_ADVERTISED_HOST` and use
+`REVIT_HOST=::1` for probing. Explicit advertised overrides are preserved. Bind
+normalization does not configure, start, or establish readiness of a listener.
 
 Registration evidence is written atomically to
 `%APPDATA%/pyRevit/RevitMCP/registrations/<pid>.json`, or
 `REVIT_MCP_REGISTRATION_DIR`. It is derived from native pyRevit registration.
 It does not contain live document wrappers or substitute for a metadata handshake.
+Native publishers serialize record replacement/pruning with an exclusive
+Windows file lease in that connector directory; contention does not block the
+API thread. Under the lease, only dead-PID or mismatched-process-start records
+are pruned. Inaccessible, invalid, or unrelated files are retained. Stale temporary
+files belonging to this process are removed. No recursive deletion occurs.
 Failure to publish logs a diagnostic; configured endpoint discovery still works.
 
 `tools.target_discovery.TargetDiscovery(directory, candidates=configured_candidates,
 handshake=metadata_handshake, local_validator=validate_local_ownership)` provides
 `await discover() -> {namespace, targets, errors}` and `await revalidate(target)`.
 Candidates are injected records `{endpoint, registration?, source?}`. Registration
-records take precedence over duplicate port probes. Default discovery reads only
+records are ordered newest first before the 256-record cap. All records for a
+probed endpoint are compared against one verified handshake. A matching live
+record takes precedence; stale records produce diagnostics and never veto an
+independently verified endpoint. Default discovery reads only
 connector JSON records and probes a bounded configured range; it never unpickles
 pyRevit records. Environment variables are `REVIT_HOST`, `REVIT_PORT_SCAN_START`
 (or `REVIT_PORT`), and `REVIT_PORT_SCAN_COUNT` (default 6, maximum 256).
@@ -114,8 +153,9 @@ advertise its reachable host name while keeping pyRevit's listening host setting
 The client must probe that advertised API-root address; no address guessing occurs.
 
 Only a successful HTTP 200 `/metadata/` JSON response qualifies, with redirects
-disabled. Metadata must agree with the probed endpoint and all supplied record
-identities. Windows loopback discovery additionally checks process creation time
+disabled. Metadata must agree with the probed endpoint; accepted registration
+evidence must agree with its full identities and process lifetime. Windows
+loopback discovery additionally checks process creation time
 and listener port ownership using the Windows process/TCP APIs. Remote targets
 use the full metadata handshake; it does not establish authentication. A local
 ownership inspector can be injected for another platform; absence of local proof

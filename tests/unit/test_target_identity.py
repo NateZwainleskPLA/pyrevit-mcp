@@ -32,6 +32,8 @@ class Document:
     def __init__(self, title="Same title", path=""):
         self.Title, self.PathName = title, path
         self.IsValidObject = True
+        self.IsLinked = False
+        self.IsFamilyDocument = False
 
     def Equals(self, other):
         return self is other

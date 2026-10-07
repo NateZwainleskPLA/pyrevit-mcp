@@ -66,9 +66,9 @@ class TargetDirectory:
         return "%s%s.%s" % (kind, self._prefix, counter)
 
     def _retire(self, handle):
+        # SQL-only: callers change in-memory verification only after COMMIT.
         self._db.execute("UPDATE targets SET retired=1 WHERE handle=?", (handle,))
         self._db.execute("UPDATE documents SET retired=1 WHERE target=?", (handle,))
-        self._verified.discard(handle)
 
     def observe(self, snapshot, expected_endpoint=None, registration=None):
         """Record validated metadata; optional native/JSON evidence must agree.
@@ -87,20 +87,36 @@ class TargetDirectory:
                     raise IdentityError("stale_registration", "registration disagrees on %s" % field)
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
+            retired_handles = set()
             try:
+                incoming = self._db.execute("SELECT * FROM targets WHERE instance=? AND runtime=?",
+                                            (data["instance_id"], data["runtime_id"])).fetchone()
+                if incoming is not None:
+                    if incoming["retired"]:
+                        raise IdentityError("expired_target", "retired runtime cannot be revived")
+                    prior = json.loads(incoming["snapshot"])
+                    if any(prior[k] != data[k] for k in ("process_id", "process_started_at")):
+                        raise IdentityError("identity_conflict", "same UUIDs claim a different process lifetime")
+                    if prior["documents_known"] and (not data["documents_known"] or
+                            data["snapshot_at"] < prior["snapshot_at"]):
+                        for k in ("documents", "documents_known", "snapshot_at"):
+                            data[k] = prior[k]
+                    for doc in data["documents"]:
+                        row = self._db.execute("SELECT retired FROM documents WHERE target=? AND token=?",
+                                               (incoming["handle"], doc["document_id"])).fetchone()
+                        if row is not None and row["retired"]:
+                            raise IdentityError("expired_document", "closed document token cannot be revived")
                 rows = self._db.execute("SELECT * FROM targets WHERE retired=0").fetchall()
                 for old in rows:
                     meta = json.loads(old["snapshot"])
                     same_identity = (old["instance"], old["runtime"]) == (data["instance_id"], data["runtime_id"])
                     if same_identity:
-                        if any(meta[k] != data[k] for k in ("process_id", "process_started_at")):
-                            self._verified.discard(old["handle"])
-                            raise IdentityError("identity_conflict", "same UUIDs claim a different process lifetime")
                         continue
                     same_process = (urlsplit(meta["endpoint"]).hostname == urlsplit(data["endpoint"]).hostname
                                     and meta["process_id"] == data["process_id"])
                     if meta["endpoint"] == data["endpoint"] or old["instance"] == data["instance_id"] or same_process:
                         self._retire(old["handle"])
+                        retired_handles.add(old["handle"])
                 old = self._db.execute("SELECT * FROM targets WHERE instance=? AND runtime=?",
                                        (data["instance_id"], data["runtime_id"])).fetchone()
                 if old is None:
@@ -135,6 +151,7 @@ class TargetDirectory:
             except BaseException:
                 self._db.execute("ROLLBACK")
                 raise
+            self._verified.difference_update(retired_handles)
             self._verified.add(handle)
             return self._describe(handle)
 
@@ -183,6 +200,7 @@ class TargetDirectory:
                 try:
                     self._retire(target)
                     self._db.execute("COMMIT")
+                    self._verified.discard(target)
                 except BaseException:
                     self._db.execute("ROLLBACK")
                     raise
