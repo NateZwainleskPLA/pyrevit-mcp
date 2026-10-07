@@ -256,4 +256,3 @@ async def test_owned_client_keeps_default_timeout_and_explicit_disable(install_h
     requests = install_http(lambda request: httpx.Response(200, json={}))
     await request_revit("GET", "http://fixture.invalid/status/", **kwargs)
     assert requests[0].extensions["timeout"]["read"] == expected
-
