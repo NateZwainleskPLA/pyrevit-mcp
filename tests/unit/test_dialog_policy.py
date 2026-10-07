@@ -526,3 +526,82 @@ def test_message_box_type_is_not_an_exact_id_supported_catalog_type():
     source[DIALOG]["event_type"] = MESSAGE
     with pytest.raises(ValueError, match="unsupported dialog event type"):
         DialogPolicy(source)
+
+
+def test_out_of_order_scope_exits_fail_closed_and_preserve_native_handler():
+    host = Host()
+    sub = subscribe(host)
+    delegate = host.handlers[0]
+    first = sub.scoped_policy(policy(), "op-A")
+    second = sub.scoped_policy(policy(), "op-B")
+    first.__enter__()
+    second.__enter__()
+    first.__exit__(None, None, None)
+    assert sub.snapshot()["policy"]["enabled"] is False
+    second.__exit__(None, None, None)
+    event = Event()
+    host.fire(event)
+    snapshot = sub.snapshot()
+    assert snapshot["scope_conflicts"] == 2
+    assert snapshot["policy"]["enabled"] is False
+    assert snapshot["scope_token"] is None
+    assert snapshot["receipts"][-1]["reason"] == "policy_disabled"
+    assert event.calls == []
+    assert host.handlers == [delegate]
+    assert host.add_count == 1
+
+
+def test_conflicting_scope_exit_does_not_mask_script_exception():
+    host = Host()
+    sub = subscribe(host)
+    late = sub.scoped_policy(policy(), "late-scope")
+    with pytest.raises(ValueError, match="script error"):
+        with sub.scoped_policy(policy(), "first-scope"):
+            late.__enter__()
+            raise ValueError("script error")
+    assert sub.snapshot()["scope_conflicts"] == 1
+    late.__exit__(None, None, None)
+    assert sub.snapshot()["scope_conflicts"] == 2
+    assert sub.snapshot()["policy"]["enabled"] is False
+    event = Event()
+    host.fire(event)
+    assert event.calls == []
+
+
+def test_unrelated_policy_swap_inside_scope_cannot_be_restored_as_finished_work():
+    host = Host()
+    sub = subscribe(host, selected=policy())
+    with sub.scoped_policy(policy(), "active"):
+        sub.set_policy(policy(), "unrelated")
+    snapshot = sub.snapshot()
+    assert snapshot["scope_conflicts"] == 1
+    assert snapshot["policy"]["enabled"] is False
+    assert snapshot["scope_token"] is None
+
+
+def test_nested_scope_cannot_hide_prior_unrelated_policy_swap():
+    host = Host()
+    sub = subscribe(host, selected=policy())
+    with sub.scoped_policy(policy(), "outer"):
+        sub.set_policy(policy(), "unrelated")
+        with sub.scoped_policy(policy(), "inner"):
+            host.fire(Event())
+    snapshot = sub.snapshot()
+    assert snapshot["scope_conflicts"] == 1
+    assert snapshot["policy"]["enabled"] is False
+    assert snapshot["scope_token"] is None
+
+
+def test_three_ordered_nested_scopes_remain_valid():
+    host = Host()
+    sub = subscribe(host)
+    with sub.scoped_policy(policy(), "outer"):
+        with sub.scoped_policy(policy(), "middle"):
+            with sub.scoped_policy(policy(), "inner"):
+                host.fire(Event())
+            assert sub.snapshot()["scope_token"] == "middle"
+        assert sub.snapshot()["scope_token"] == "outer"
+    snapshot = sub.snapshot()
+    assert snapshot["scope_conflicts"] == 0
+    assert snapshot["policy_generation"] == 6
+    assert snapshot["policy"]["enabled"] is False

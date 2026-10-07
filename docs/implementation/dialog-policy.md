@@ -118,8 +118,18 @@ activate a callback.
 policy and token in `finally`, also on exceptions and after the subscription is
 closed inside the scope. Restoration increments generation and does not reactivate
 anything. Nested scopes must unwind in order; one host owner must serialize
-independent scopes. These helpers do not enforce execution ownership or native
-context validation; those remain consumer responsibilities.
+independent scopes. A scoped exit checks that its frame is the most recent and
+that its policy generation is still current. Proper nested restoration advances
+the parent's expected generation; an unrelated swap is not hidden by nesting.
+An out-of-order/stale exit or intervening unrelated `set_policy` disables responses,
+clears the token, invalidates remaining scope frames, and increments the snapshot's
+`scope_conflicts` counter. Later stale exits fail closed again rather than resurrect
+a finished scope's enabled policy. The counter counts conflicting exits, not
+operations; it starts at 0 for the subscription lifetime. Inspect it after scope
+cleanup to surface misuse. No new exception replaces an in-flight script error.
+This is a fail-safe for a violated serialization contract, **not overlap support**.
+These helpers do not enforce execution ownership or native context validation;
+those remain consumer responsibilities.
 
 The retained instance anchors validated policy classes across module reloads so
 it can accept the current module's `DialogPolicy` and restore prior validated
@@ -154,6 +164,8 @@ Keep this primitive separate until completed execution/routing commits supply:
    including errors, cancellation and
    pending native interaction. Policy state cannot leak into the next operation.
    An unknown dialog is observed and left for the user, never forcibly canceled.
+   Read `scope_conflicts` after cleanup and surface any increment through the
+   owner's existing diagnostics; do not treat a conflicting scope as normal use.
 4. Receipt correlation using the operation owner's existing IDs/identities and a
    `current_sequence()` range within the same subscription lifetime plus the
    active policy generation/optional caller token; expose dropped records.

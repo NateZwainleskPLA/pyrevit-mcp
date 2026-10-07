@@ -143,6 +143,8 @@ class DialogSubscription(object):
         self._policy_classes = [DialogPolicy]
         self._policy_generation = 0
         self._scope_token = None
+        self._scope_frames = []
+        self._scope_conflicts = 0
         self._build = revit_build
         self._attach = attach
         self._detach = detach
@@ -200,15 +202,34 @@ class DialogSubscription(object):
         """Restore prior policy/token in finally without changing native hooks.
 
         Nested scopes must unwind in order; independent overlapping scopes are
-        not supported. Restoration stays inactive if the scope closed the host.
+        not supported. Conflicting exits disable responses and increment the
+        snapshot's scope_conflicts, without masking an in-flight exception.
+        Restoration stays inactive if the scope closed the host.
         """
         with self._lock:
             previous_token = self._scope_token
+            parent_generation = self._policy_generation
             previous_policy = self.set_policy(policy, scope_token)
+            frame = {"generation": self._policy_generation,
+                     "parent_generation": parent_generation}
+            self._scope_frames.append(frame)
         try:
             yield self
         finally:
-            self.set_policy(previous_policy, previous_token)
+            with self._lock:
+                if (self._scope_frames and self._scope_frames[-1] is frame
+                        and self._policy_generation == frame["generation"]):
+                    self._scope_frames.pop()
+                    self.set_policy(previous_policy, previous_token)
+                    # A valid nested restore advances its parent's generation.
+                    # Never conceal an unrelated set_policy made before entry.
+                    if (self._scope_frames and self._scope_frames[-1]["generation"]
+                            == frame["parent_generation"]):
+                        self._scope_frames[-1]["generation"] = self._policy_generation
+                else:
+                    self._scope_conflicts += 1
+                    self._scope_frames[:] = []
+                    self.set_policy(DialogPolicy())
 
     def snapshot(self):
         with self._lock:
@@ -216,6 +237,7 @@ class DialogSubscription(object):
                     "policy": self._policy.snapshot(),
                     "policy_generation": self._policy_generation,
                     "scope_token": self._scope_token,
+                    "scope_conflicts": self._scope_conflicts,
                     "current_sequence": self._sequence,
                     "dropped_receipts": self._dropped,
                     "receipts": copy.deepcopy(self._receipts)}
