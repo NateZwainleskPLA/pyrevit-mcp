@@ -148,6 +148,9 @@ def test_status_registrar_accepts_api_that_disallows_liveness(registered_routes)
 
 
 def test_legacy_startup_registers_liveness_separately(registered_routes, monkeypatch):
+    # This parent-layer test isolates the independent status registration seam.
+    # Real successful/degraded identity composition is covered by identity tests.
+    monkeypatch.setattr("revit_mcp.target_runtime.initialize_legacy_identity", lambda api: None)
     for name, registrar in {
         "views": "register_views_routes", "placement": "register_placement_routes",
         "colors": "register_color_routes", "code_execution": "register_code_execution_routes",
