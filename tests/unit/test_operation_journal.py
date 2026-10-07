@@ -138,3 +138,29 @@ def test_operation_ids_cannot_escape_journal_directory(tmp_path):
     store.admit(payload("../elsewhere/../operation"))
     assert len(list(tmp_path.glob("*.json"))) == 1
     assert store.journal.load("generation")[0]["operation_id"] == "../elsewhere/../operation"
+
+
+@pytest.mark.parametrize("state,effects", [("succeeded", "committed"), ("canceled", "committed")])
+def test_stop_during_execution_preserves_final_archived_effects(tmp_path, state, effects):
+    store = journal_store(tmp_path)
+    engine = runtime(store=store)
+    executed = []
+
+    def execute(data, context, cancellation_check):
+        executed.append(data["operation_id"])
+        engine.stop()
+        assert cancellation_check()
+        return dict(state=state, effects=effects, result={"prior_commit": True})
+
+    engine.execute = execute
+    engine.submit(payload())
+    engine.submit(payload("queued"))
+    engine.on_external_event(None)
+    archive = dict((receipt["operation_id"], receipt) for receipt in store.journal.load("generation"))
+    assert (archive["one"]["state"], archive["one"]["effects"]) == (state, effects)
+    assert archive["one"]["result"]["prior_commit"] is True
+    assert archive["queued"]["state"] == "unknown_after_restart"
+    assert executed == ["one"] and not engine.command_running
+    with pytest.raises(OperationError, match="expired"):
+        store.inspect("one")
+    engine.dispose_in_api_context()

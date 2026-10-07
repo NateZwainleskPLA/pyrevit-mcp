@@ -234,7 +234,10 @@ class OperationStore(object):
             self.expired = True
             self.queue.clear()
             for record in self.records.values():
-                if record["receipt"]["state"] not in TERMINAL:
+                # A callback already owns running work. Expiry requests its
+                # cooperative cancellation but must still permit finalization
+                # and durable archival of effects after that callback returns.
+                if record["receipt"]["state"] == "queued":
                     record["receipt"].update(state="unknown_after_restart", effects="unknown")
                 record["payload"] = None
 
