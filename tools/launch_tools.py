@@ -112,43 +112,59 @@ def _build_launch_command(revit_path, file_path=None, language=None):
     return args
 
 
-async def _wait_for_revit_ready(revit_get, ctx, timeout, poll_interval=5):
-    """Poll document-free Routes liveness until the listener responds.
-
-    This establishes listener availability, not document/API execution readiness.
-    Avoid /status/: its document-context dispatch can wait behind a modal dialog
-    and remain pending after a client timeout. A timeout is not proof of liveness.
-    Requires received HTTP 200 JSON identifying the connector as alive. This
-    check does not validate a launched process's identity or document state.
-    """
+async def _wait_for_revit_ready(discovery, process, started_at, ctx, timeout,
+                                expected_version, poll_interval=1, clock=None):
+    """Wait for the retained child process's own verified runtime registration."""
     import time
+    from urllib.parse import urlsplit
+    from revit_mcp.identity import validate_snapshot
 
-    start = time.time()
-    while time.time() - start < timeout:
-        elapsed = int(time.time() - start)
+    clock = clock or time.monotonic
+    deadline = clock() + timeout
+    last_error = None
+    while clock() < deadline:
+        if process.poll() is not None:
+            return False, {"error_code": "launched_process_exited", "process_id": process.pid,
+                           "exit_code": process.returncode}
         if ctx:
-            await ctx.info(
-                "Waiting for Revit to be ready... ({}s / {}s)".format(
-                    elapsed, timeout
-                )
-            )
+            await ctx.info("Waiting for launched Revit PID {} registration...".format(process.pid))
         try:
-            response = await revit_get("/health/", ctx=None, timeout=5.0)
-            result = getattr(response, "transport_result", None)
-            if (result is not None and result.status_code == 200 and result.json_received and
-                    isinstance(result.body, dict) and not result.revit_error and
-                    result.body.get("api_name") == "revit_mcp" and
-                    result.body.get("status") == "alive"):
-                return True, response
-        except Exception:
-            pass
-        await anyio.sleep(poll_interval)
+            with anyio.fail_after(max(0.001, deadline - clock())):
+                listing = await discovery.discover()
+                for target in listing.get("targets", []):
+                    # A local launch cannot bind a remote host with coincident PID.
+                    if urlsplit(target.get("endpoint", "")).hostname not in ("localhost", "127.0.0.1", "::1"):
+                        continue
+                    if (target.get("process_id") != process.pid or
+                            target.get("process_started_at") != started_at or
+                            target.get("revit_version") != expected_version):
+                        continue
+                    validate_snapshot(target)
+                    if target.get("runtime_available") is False or not target.get("target"):
+                        continue
+                    if not target.get("documents_known"):
+                        continue  # API-context snapshot initialization still pending
+                    await discovery.revalidate(target["target"])
+                    # Read the refreshed descriptor; do not accept a superseded generation.
+                    fresh = next(item for item in discovery.directory.targets()
+                                 if item["target"] == target["target"])
+                    if any(fresh.get(key) != target.get(key) for key in
+                           ("instance_id", "runtime_id", "process_id", "process_started_at")):
+                        continue
+                    if process.poll() is None:
+                        return True, fresh
+                    return False, {"error_code": "launched_process_exited", "process_id": process.pid}
+        except Exception as error:
+            last_error = str(error) or type(error).__name__
+        remaining = deadline - clock()
+        if remaining > 0:
+            await anyio.sleep(min(poll_interval, remaining))
+    return False, {"error_code": "launch_verification_timeout", "process_id": process.pid,
+                   "process_started_at": started_at, "verification_error": last_error}
 
-    return False, None
 
-
-def register_launch_tools(mcp, revit_get):
-    """Register Revit launch and discovery tools with the MCP server."""
+def register_launch_tools(mcp, revit_get=None, discovery=None):
+    """Register launch tools; discovery and its handle directory are injected."""
 
     @mcp.tool()
     async def list_revit_installations(ctx: Context) -> str:
@@ -194,9 +210,14 @@ def register_launch_tools(mcp, revit_get):
     ) -> str:
         """Launch Revit on this machine, optionally opening a file.
 
-        Finds installed Revit versions automatically. After launching, polls
-        the document-free pyRevit Routes health endpoint until the listener
-        responds. Document/API work may still wait while Revit is busy or modal.
+        Finds installed Revit versions automatically. Retains the child PID and
+        process start time, then waits for its own verified runtime registration.
+        Returns that runtime's target handle. Cached registration does not prove
+        that a native dialog has closed or a requested file finished opening.
+        Verification requires a loopback registration (localhost, 127.0.0.1 or
+        ::1). A local child advertised only through a LAN/non-loopback endpoint
+        remains launched_unverified after the bounded timeout; remote PID
+        coincidence cannot establish ownership of this locally launched child.
 
         For workshared (central model) files, Revit will show its native
         worksharing dialog on open. Use the open_document tool after launch
@@ -266,13 +287,16 @@ def register_launch_tools(mcp, revit_get):
                 indent=2,
             )
 
+        if discovery is None:
+            return json.dumps({"status": "error", "error": "Launch verification requires the shared target discovery service"})
+
         # Build and launch
         cmd = _build_launch_command(
             selected["path"], file_path, language
         )
 
         try:
-            subprocess.Popen(cmd)
+            process = subprocess.Popen(cmd)
         except OSError as e:
             return json.dumps(
                 {
@@ -282,6 +306,13 @@ def register_launch_tools(mcp, revit_get):
                 },
                 indent=2,
             )
+        try:
+            from .windows_target_evidence import process_started_at
+            started_at = process_started_at(process.pid)
+        except (OSError, ValueError) as error:
+            return json.dumps({"status": "launched_unverified", "revit_ready": False,
+                               "process_id": process.pid, "error_code": "process_identity_unavailable",
+                               "error": str(error)}, indent=2)
 
         if ctx:
             await ctx.info(
@@ -290,20 +321,27 @@ def register_launch_tools(mcp, revit_get):
                 )
             )
 
-        # Poll for readiness
         ready, status_response = await _wait_for_revit_ready(
-            revit_get, ctx, timeout
-        )
+            discovery, process, started_at, ctx, timeout, selected["year"])
+
 
         result = {
-            "status": "success",
+            "status": "success" if ready else "launched_unverified",
             "revit_version": selected["year"],
             "revit_path": selected["path"],
-            "file_opened": file_path,
+            "requested_file": file_path,
+            "process_id": process.pid,
+            "process_started_at": started_at,
             "revit_ready": ready,
         }
 
         if ready:
+            result["target"] = status_response["target"]
+            result["actual_target"] = {key: status_response[key] for key in ("instance_id", "runtime_id")}
+            result["documents"] = status_response["documents"]
+            result["file_open_verified"] = bool(file_path and any(
+                os.path.normcase(os.path.abspath(item["path"])) == os.path.normcase(os.path.abspath(file_path))
+                for item in status_response["documents"] if item["path"]))
             result["message"] = (
                 "Revit {} is running and pyRevit Routes is active.".format(
                     selected["year"]
@@ -312,10 +350,13 @@ def register_launch_tools(mcp, revit_get):
             if status_response:
                 result["revit_status"] = status_response
         else:
+            result["verification"] = status_response
             result["message"] = (
                 "Revit {} was launched but did not respond within {} seconds. "
                 "Ensure pyRevit is installed and Routes Server is enabled in "
-                "pyRevit Settings.".format(selected["year"], timeout)
+                "pyRevit Settings. Child verification requires a loopback "
+                "registration; LAN/non-loopback advertised endpoints are unsupported "
+                "for local launch verification.".format(selected["year"], timeout)
             )
 
         if file_path:

@@ -294,9 +294,12 @@ def test_strict_initialization_still_raises_without_legacy_metadata(native_host)
 
 
 @pytest.mark.parametrize("failure", [None, "early", "partial"])
-def test_actual_legacy_startup_keeps_raw_health_and_routes_independent(native_host, monkeypatch, failure):
+def test_targeted_startup_requires_strict_identity_without_legacy_fallback(native_host, monkeypatch, failure):
     api = CapturedAPI()
     sys.modules["pyrevit"].routes.API = lambda name: api
+    def forbidden_legacy_initializer(api):
+        pytest.fail("Targeted startup called the legacy degraded initializer")
+    monkeypatch.setattr(runtime, "initialize_legacy_identity", forbidden_legacy_initializer)
     if failure == "early":
         native_host.registration.process_id = 999
     elif failure == "partial":
@@ -322,18 +325,25 @@ def test_actual_legacy_startup_keeps_raw_health_and_routes_independent(native_ho
             registrar: lambda api, name=name: calls.append(name)}))
     spec = importlib.util.spec_from_file_location("_identity_review_startup", source_dir / "startup.py")
     startup = importlib.util.module_from_spec(spec)
+    if failure:
+        expected = "does not belong" if failure == "early" else "partial metadata registration"
+        with pytest.raises(RuntimeError, match=expected):
+            spec.loader.exec_module(startup)
+        assert calls == []
+        assert "/health/" not in api.handlers
+        assert "/status/" not in api.handlers
+        # Partial strict initialization can have registered cached metadata;
+        # it must never turn into a degraded legacy success/fallback.
+        if "/metadata/" in api.handlers:
+            assert api.handlers["/metadata/"]()["status"] != 503
+        return
     spec.loader.exec_module(startup)
     assert len(calls) == 6
-    assert not inspect.signature(api.handlers["/health/"]).parameters
-    assert api.handlers["/health/"]() == {
-        "status": 200, "data": {"status": "alive", "api_name": "revit_mcp"}}
-    assert api.handlers["/status/"](Document())["status"] == 200
+    assert "/health/" not in api.handlers
+    assert list(inspect.signature(api.handlers["/status/"]).parameters) == ["uiapp", "request"]
     metadata_response = api.handlers["/metadata/"]()
-    assert metadata_response["status"] == (503 if failure else 200)
-    if failure:
-        assert not {"instance_id", "runtime_id", "documents"}.intersection(metadata_response["data"])
-    else:
-        assert validate_snapshot(metadata_response["data"])["endpoint"] == "http://127.0.0.1:48884/revit_mcp"
+    assert metadata_response["status"] == 200
+    assert validate_snapshot(metadata_response["data"])["endpoint"] == "http://127.0.0.1:48884/revit_mcp"
 
 
 async def test_retirement_during_metadata_tool_read_is_a_typed_error(mock_mcp):

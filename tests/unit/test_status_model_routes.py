@@ -147,10 +147,11 @@ def test_status_registrar_accepts_api_that_disallows_liveness(registered_routes)
     assert set(api.handlers) == {("/status/", ("GET",))}
 
 
-def test_legacy_startup_registers_liveness_separately(registered_routes, monkeypatch):
-    # This parent-layer test isolates the independent status registration seam.
-    # Real successful/degraded identity composition is covered by identity tests.
-    monkeypatch.setattr("revit_mcp.target_runtime.initialize_legacy_identity", lambda api: None)
+def test_targeted_startup_omits_legacy_raw_liveness(registered_routes, monkeypatch):
+    slots = {}
+    monkeypatch.setitem(sys.modules, "System", SimpleNamespace(AppDomain=SimpleNamespace(
+        CurrentDomain=SimpleNamespace(GetData=slots.get, SetData=slots.__setitem__))))
+    monkeypatch.setitem(sys.modules, "revit_mcp.target_runtime", SimpleNamespace(initialize_identity=lambda api: None))
     for name, registrar in {
         "views": "register_views_routes", "placement": "register_placement_routes",
         "colors": "register_color_routes", "code_execution": "register_code_execution_routes",
@@ -164,26 +165,17 @@ def test_legacy_startup_registers_liveness_separately(registered_routes, monkeyp
     startup = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(startup)
     assert set(startup.api.handlers) == {
-        ("/health/", ("GET",)), ("/status/", ("GET",)), ("/model_info/", ("GET",)),
+        ("/status/", ("GET",)), ("/model_info/", ("GET",)),
     }
-    assert startup.api.handlers[("/health/", ("GET",))]() == {
-        "status": 200, "data": {"status": "alive", "api_name": "revit_mcp"},
-    }
+    assert "uiapp" in inspect.signature(startup.api.handlers[("/status/", ("GET",))]).parameters
     assert registered_routes.document_reads == []
 
 
-async def test_launch_liveness_bypasses_pending_document_dispatch(registered_routes, monkeypatch):
-    """Exercise the real poller and registered routes with API dispatch unavailable."""
-    import time
-    from unittest.mock import AsyncMock
-    from tools.launch_tools import _wait_for_revit_ready
+async def test_separate_liveness_handler_bypasses_pending_document_dispatch(registered_routes):
+    """The legacy primitive registrar is separate; modern launch uses metadata."""
     from tools.revit_transport import RevitTransportResult
     from tools.utils import compatibility_response
 
-    timestamps = iter([0, 0, 0, 10])
-    monkeypatch.setattr(time, "time", lambda: next(timestamps, 10))
-    sleep = AsyncMock()
-    monkeypatch.setattr("tools.launch_tools.anyio.sleep", sleep)
     calls = []
 
     async def dispatch(path, **kwargs):
@@ -197,11 +189,10 @@ async def test_launch_liveness_bypasses_pending_document_dispatch(registered_rou
             status_code=response["status"], body=response["data"], json_received=True,
         ))
 
-    ready, response = await _wait_for_revit_ready(dispatch, ctx=None, timeout=1)
-    assert ready is True
+    response = await dispatch("/health/")
+    assert response.transport_result.http_success
     assert response == {"status": "alive", "api_name": "revit_mcp"}
     assert calls == ["/health/"]
-    sleep.assert_not_awaited()
     assert registered_routes.document_reads == []
 
 
