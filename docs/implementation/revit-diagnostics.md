@@ -32,21 +32,43 @@ installed build, or current working directory does not prove which code/model is
 loaded. This workstream introduces no alternate discovery route or handle mapping.
 
 `revit_mcp.runtime_diagnostics.collect_loaded_runtime_metadata(application,
-runtime_snapshot, loaded_build=None, pyrevit_version=None)` is a read-only capture
+runtime_snapshot, loaded_build=None, pyrevit_version=None, modules=None,
+extra_paths=())` is a read-only capture
 helper for a future approved runtime hook. Call it once in a valid API context
 and cache the returned primitives for background inspection. Supply the existing
 identity owner's primitive snapshot without rebuilding it. It preserves that
 snapshot verbatim, including future fields/freshness, and records capture time
 separately; capturing diagnostics does not refresh the identity snapshot.
 
+API capture performs **no file I/O**: only loaded module/path metadata and the
+three Revit application properties are read. Source hashing is an optional,
+separate background step, so cloud-backed files cannot hydrate/read on the Revit
+UI thread during this capture. Metadata remains useful even if that disk step
+is skipped.
+
 The helper reports loaded Revit `VersionNumber`, `VersionName`, `VersionBuild`,
 Python/IronPython version/platform, and loaded connector module paths/declared
 versions from `sys.modules`. It accepts a build stamp **retained at initialization**
 and a version from the loaded pyRevit host; absent stamps/versions remain null.
-The lifecycle owner supplies them. A current `git rev-parse`, package manifest,
+The lifecycle owner supplies them. `revit_mcp.__version__` is a declared package
+version (currently static `0.1.0`), not a source revision. `startup.py` is outside
+the module namespace filter: supply its actual `__file__` path retained by the
+loaded entry script using `extra_paths=(loaded_startup_path,)`. It is recorded in
+`extra_sources` without resolving, opening or inferring a path from this checkout.
+The helper does not discover which engine owns an entry script or prove its loaded
+contents; that remains lifecycle evidence. A current `git rev-parse`, package manifest,
 installer inventory or source-file digest is not a loaded-runtime build stamp.
-`source_file_sha256_at_capture` is explicitly a hash of bytes on disk at capture,
-which may have changed since load. Capture/file-access errors remain visible.
+`hash_loaded_sources(metadata)` accepts only the copied primitive capture and
+returns a separately copied result with digests/error types for both module and
+extra paths. Run it in a background worker **after** API capture; never pass Revit
+or module wrappers to the worker. It records `source_hashes_captured_at_unix` after
+the disk pass and preserves the original `captured_at_unix` and identity snapshot
+freshness. Initial source digests and disk timestamp are null. Individual file
+failures do not stop other files, and a failed repeat read clears the old digest.
+`source_file_sha256_at_capture` is explicitly a hash of bytes on disk during that
+later pass, which may have changed since load or even since API capture. The pass
+is not an atomic filesystem snapshot and cannot attest to loaded bytecode.
+Capture/file-access errors remain visible.
 
 Illustrative future hook, inside an authorized disposable host's API callback:
 
@@ -54,12 +76,22 @@ Illustrative future hook, inside an authorized disposable host's API callback:
 from revit_mcp.runtime_diagnostics import collect_loaded_runtime_metadata
 
 # These values come from completed identity/lifecycle interfaces, not new IDs.
-cached_diagnostics = collect_loaded_runtime_metadata(
+captured_diagnostics = collect_loaded_runtime_metadata(
     uiapp.Application,
     approved_identity_snapshot,
     loaded_build=initialization_build_stamp,
     pyrevit_version=loaded_pyrevit_version,
+    extra_paths=(loaded_startup_path,),  # retained entry-script __file__, not guessed
 )
+```
+
+Optional second step, scheduled by the host after API capture in a background
+worker without accessing Revit objects:
+
+```python
+from revit_mcp.runtime_diagnostics import hash_loaded_sources
+
+cached_diagnostics = hash_loaded_sources(captured_diagnostics)
 ```
 
 This is a helper contract, not an installed route or runnable unbound MCP call.
@@ -124,6 +156,11 @@ Native experiment and evidence record
    native outcome and document/operation readback. `OverrideResult=True` alone
    proves neither completion nor transaction effects. Unknown dialogs remain
    untouched. No fallback to OK, broad text matches or generic suppression.
+   Empty-ID dialogs (standard message boxes and TaskDialogs without IDs) remain
+   observation-only. When an authorized consumer eventually owns a serialized
+   operation scope, use `subscription.scoped_policy` on the existing delegate,
+   with generation/token and sequence-range correlation; do not detach/reattach
+   for policy changes. Actual operation integration remains pending.
 5. If native interaction blocks work, preserve the original operation ID and
    inspect its receipt through the established inspection API when available.
    A timeout does not prove failure and is not permission to replay a mutation.
@@ -143,8 +180,8 @@ Pending acceptance matrix:
 | Rejected/throwing override | One attempt, rejected/error receipt, no fallback | Offline callback only; native pending |
 | Repeated initialization | Exactly one retained delegate and one receipt per event | Offline reload/replacement only |
 | Detach/reload/restart | Old delegate removed, no duplicate callbacks, expired identities remain expired | Native engine lifetime pending |
-| Per-operation scope | Opt-in after full identity/document checks; unrelated UI untouched; finally cleanup | Integration pending |
-| Loaded diagnostics | Actual loaded builds/paths and primitive cached inspection | Fake application tests only |
+| Per-operation scope | Opt-in after full identity/document checks; unrelated UI untouched; finally cleanup | Offline policy-swap/scope tests; consumer integration pending |
+| Loaded diagnostics | Actual loaded builds/paths, optional startup path, primitive cached inspection; disk hashes collected separately | Fake application/background-file tests only |
 | Fixture/settings evidence | Originals unchanged, hashes and restoration comparison | Filesystem tests passed |
 
 Opt-in add-in isolation
