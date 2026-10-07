@@ -5,7 +5,7 @@ from revit_mcp.routing_policy import ROUTES, RoutingPolicyError, check_ui_policy
 
 def test_all_existing_document_routes_have_document_requirement():
     assert {path for path, policy in ROUTES.items() if not policy[0]} == {
-        "/status/", "/open_document/", "/operations/inspect/", "/operations/cancel/"
+        "/status/", "/open_document/", "/execute_application_code/", "/operations/inspect/", "/operations/cancel/"
     }
 
 

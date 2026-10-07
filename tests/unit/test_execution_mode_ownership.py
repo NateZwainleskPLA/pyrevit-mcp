@@ -44,6 +44,11 @@ def test_factory_refuses_boolean_only_and_incomplete_exclusion():
     with pytest.raises(ValueError, match="exclusion"):
         module.build_runtime_in_api_context(reg, uiapp, adapter.execute_payload,
                      experimental=True, exclusive=True, exclusion_receipt=partial)
+    missing_application = exclusion_receipt()
+    missing_application["excluded_routes"].remove("/execute_application_code/")
+    with pytest.raises(ValueError, match="exclusion"):
+        module.build_runtime_in_api_context(reg, uiapp, adapter.execute_payload,
+                     experimental=True, exclusive=True, exclusion_receipt=missing_application)
     missing_reload = exclusion_receipt()
     missing_reload.pop("private_runtime_reload_guard")
     with pytest.raises(ValueError, match="reload guard"):

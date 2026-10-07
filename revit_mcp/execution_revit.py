@@ -9,10 +9,12 @@ class ScopedRevit(object):
     host context. Scripts must pass doc explicitly to such helpers. Routing can
     supply a stricter facade through execute_payload's revit_context argument.
     """
-    def __init__(self, module, document, uidocument):
+    def __init__(self, module, document, uidocument, application=None, uiapplication=None):
         self._module = module
         self._document = document
         self._uidocument = uidocument
+        self._application = application
+        self._uiapplication = uiapplication
 
     def __setattr__(self, name, value):
         if name.startswith("_"):
@@ -31,6 +33,14 @@ class ScopedRevit(object):
     @property
     def uidoc(self):
         return self._uidocument
+
+    @property
+    def app(self):
+        return self._application
+
+    @property
+    def uiapp(self):
+        return self._uiapplication
 
     @property
     def docs(self):
@@ -70,7 +80,7 @@ class ScopedRevit(object):
         return self._transaction("TransactionGroup", name, doc, args, kwargs)
 
     def __getattr__(self, name):
-        if name in ("doc", "uidoc", "docs", "active_view", "active_ui_view",
+        if name in ("doc", "uidoc", "docs", "app", "uiapp", "active_view", "active_ui_view",
                     "Transaction", "TransactionGroup"):
             # A property raising AttributeError must not activate a host fallback.
             raise AttributeError("Supplied execution context cannot provide {0}".format(name))

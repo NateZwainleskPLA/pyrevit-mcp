@@ -53,6 +53,8 @@ class TargetRouter:
             raise RoutingPolicyError("missing_target", "An explicit target handle is required")
         if requires_document and not document:
             raise RoutingPolicyError("missing_document", "An explicit document handle is required")
+        if endpoint == "/execute_application_code/" and document is not None:
+            raise RoutingPolicyError("unexpected_document", "Application execution does not accept a document handle")
         if type(allow_ui_change) is not bool:
             raise RoutingPolicyError("invalid_ui_permission", "allow_ui_change must be a boolean")
         operation_values = params if method.upper() == "GET" else data

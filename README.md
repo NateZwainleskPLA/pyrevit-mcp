@@ -91,6 +91,9 @@ They never conflict because they serve different roles, speak different protocol
 | `create_point_based_element` | ✅ Implemented | Element Creation | Create point-based elements (doors, windows, furniture) |
 | `color_splash` | ✅ Implemented | Visualization | Color elements based on parameter values |
 | `execute_revit_code` | ✅ Implemented | Code Execution | Execute IronPython code directly in Revit context |
+| `execute_revit_script_file` | ✅ Implemented | Code Execution | Execute a local UTF-8 script in an explicitly selected document |
+| `execute_revit_application_code` | ✅ Implemented | Code Execution | Execute in an explicit instance without an initial document, including at Home |
+| `execute_revit_application_script_file` | ✅ Implemented | Code Execution | Execute a local UTF-8 script in explicit application scope |
 | `list_revit_installations` | ✅ Implemented | Launch & Document | Discover all Revit versions installed on the system |
 | `launch_revit` | ✅ Implemented | Launch & Document | Launch Revit, optionally with a file, and poll for readiness |
 | `open_document` | ✅ Implemented | Launch & Document | Open a document in running Revit (supports detach and audit) |
