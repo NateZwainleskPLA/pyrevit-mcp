@@ -6,7 +6,8 @@ Execution foundations
 required target/document handles and full receiver identity validation. This
 foundation does not claim the legacy route already meets the targeting contract.
 
-`execute_script(code, namespace, script_name)` in `execution_output.py` restores
+`execute_script(code, namespace, script_name, buffer_factory=None)` in
+`execution_output.py` uses a single bounded journal by default and restores
 stdout and stderr in an outer finally, including SystemExit/KeyboardInterrupt.
 Output remains separate from stderr. Failures preserve `partial_output`,
 `error_type`, `traceback`, and `script_location` (filename/line/column). A supplied
@@ -164,8 +165,16 @@ changes execution effects. `output_truncated`, `stderr_truncated`, and
 `stderr_dropped_chars`) describe the loss. Partial output uses the same capped
 prefix. Whichever stream writes first consumes the shared budget.
 
-Both the buffer and fallback write journal retain bounded text; empty writes
-and discarded overflow do not append journal entries. Concurrent writes reserve
+The default retained store is a single bounded write journal; empty writes
+and discarded overflow do not append journal entries. An optional buffer_factory
+remains available for diagnostic/failure injection, including the StringIO/io
+fallback. Its first write/flush failure is recorded as output_write/stderr_write
+or output_flush/stderr_flush and never aborts the script. Repeated failures are
+latched per stream/stage so diagnostics remain bounded. Sink read/close errors
+remain separate cleanup diagnostics; all sink errors can make the result an
+OutputCleanupError but preserve completed model effects and primary exceptions.
+CaptureStream supplies writelines, flush, idempotent close and closed state;
+fileno raises IOError because capture has no file descriptor. Concurrent writes reserve
 the shared budget under a lock. This bounds capture memory during execution,
 including scripts that repeatedly print beyond the limit; it does not bound
 objects allocated by arbitrary script code, exception traces, or other receipts.
