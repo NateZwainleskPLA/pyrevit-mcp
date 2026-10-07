@@ -91,6 +91,8 @@ class JsonAdapter(object):
 
 
 def build_hints(error_type, message):
+    if "NoneType" in message and "ActiveView" in message:
+        return ["UI view access requires allow_ui_change=True and an eligible supplied UIDocument; inactive-document work has no uidoc."]
     if "Multiple targets could match" in message and "ElementId" in message:
         return ["Use eid(value) to select the explicit Int64 ElementId overload."]
     if "not JSON serializable" in message:

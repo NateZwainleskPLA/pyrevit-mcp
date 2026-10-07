@@ -45,14 +45,23 @@ def safe_text(value):
 
 
 class CaptureStream(object):
-    """Retain written text even when the backing buffer fails to read/close."""
+    """One retained journal, with an optional diagnostic buffer injection."""
     encoding = "utf-8"
 
-    def __init__(self, buffer_factory, budget):
-        self.buffer = buffer_factory()
+    def __init__(self, buffer_factory, budget, name="output"):
+        self.buffer = None if buffer_factory is None else buffer_factory()
         self.parts = []
         self.budget = budget
         self.dropped = 0
+        self.name = name
+        self.closed = False
+        self.errors = []
+        self._failed_stages = set()
+
+    def _record_error(self, stage, error):
+        if stage not in self._failed_stages:
+            self._failed_stages.add(stage)
+            self.errors.append({"stage": self.name + "_" + stage, "error": safe_text(error)})
 
     def write(self, value):
         if isinstance(value, bytes) and not isinstance(value, text_type):
@@ -60,6 +69,8 @@ class CaptureStream(object):
         value = text_type(value)
         length = len(value)
         with self.budget.lock:
+            if self.closed:
+                raise ValueError("I/O operation on closed capture stream")
             retained = value[:max(0, self.budget.limit - self.budget.retained)]
             self.dropped += length - len(retained)
             if retained:
@@ -67,12 +78,44 @@ class CaptureStream(object):
                 # by the retained budget, even for arbitrarily many small writes.
                 self.budget.retained += len(retained)
                 self.parts.append(retained)
-                self.buffer.write(retained)
+                if self.buffer is not None and "write" not in self._failed_stages:
+                    try:
+                        self.buffer.write(retained)
+                    except BaseException as error:
+                        # The journal already contains the retained output. A
+                        # diagnostic sink failure must not interrupt model work.
+                        self._record_error("write", error)
         # Truncation is diagnostic only and never aborts model execution.
         return length
 
     def flush(self):
-        return self.buffer.flush()
+        with self.budget.lock:
+            if self.closed:
+                raise ValueError("I/O operation on closed capture stream")
+            if self.buffer is not None and "flush" not in self._failed_stages:
+                try:
+                    self.buffer.flush()
+                except BaseException as error:
+                    self._record_error("flush", error)
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+    def close(self):
+        with self.budget.lock:
+            if self.closed:
+                return
+            try:
+                if self.buffer is not None:
+                    self.buffer.close()
+            except BaseException as error:
+                self._record_error("close", error)
+            finally:
+                self.closed = True
+
+    def fileno(self):
+        raise IOError("Capture stream has no file descriptor")
 
     def isatty(self):
         return False
@@ -98,7 +141,7 @@ def exception_details(error, exc_info, filename):
             "script_location": location}
 
 
-def execute_script(code, namespace, script_name="<revit-script>", buffer_factory=StringIO,
+def execute_script(code, namespace, script_name="<revit-script>", buffer_factory=None,
                    runner=None, output_limit_chars=DEFAULT_OUTPUT_LIMIT_CHARS):
     """Execute code and always restore both streams, including BaseException.
 
@@ -113,8 +156,8 @@ def execute_script(code, namespace, script_name="<revit-script>", buffer_factory
               "script_name": filename}
     cleanup_errors = []
     try:
-        stdout = CaptureStream(buffer_factory, budget)
-        stderr = CaptureStream(buffer_factory, budget)
+        stdout = CaptureStream(buffer_factory, budget, "output")
+        stderr = CaptureStream(buffer_factory, budget, "stderr")
         sys.stdout, sys.stderr = stdout, stderr
         compiled = compile(code, filename, "exec")
         # eval accepts exec-mode code objects on Python 2 and 3. Calling the
@@ -131,16 +174,15 @@ def execute_script(code, namespace, script_name="<revit-script>", buffer_factory
         for name, stream in (("output", stdout), ("stderr", stderr)):
             if stream is None:
                 continue
-            result[name] = u"".join(stream.parts)
-            try:
-                # The write journal includes attempted writes if the buffer failed.
-                stream.buffer.getvalue()
-            except BaseException as error:
-                cleanup_errors.append({"stage": name + "_read", "error": safe_text(error)})
-            try:
-                stream.buffer.close()
-            except BaseException as error:
-                cleanup_errors.append({"stage": name + "_close", "error": safe_text(error)})
+            with budget.lock:
+                result[name] = u"".join(stream.parts)
+                if stream.buffer is not None and not stream.closed:
+                    try:
+                        stream.buffer.getvalue()
+                    except BaseException as error:
+                        stream._record_error("read", error)
+                stream.close()
+                cleanup_errors.extend(stream.errors)
     if cleanup_errors:
         result["cleanup_errors"] = cleanup_errors
         if result["status"] == "success":
