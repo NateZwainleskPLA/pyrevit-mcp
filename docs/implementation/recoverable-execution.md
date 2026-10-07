@@ -184,10 +184,22 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
   (`cc6a1a9`, `docs/reviews/opus-pr-4.md` on `review-opus-pr-4`) identifies that
   a policy fixed per subscription requires detach/reattach for each operation
   and resets its receipt sequence; sequence ranges alone cannot uniquely
-  correlate receipts across operations. Before adding consumer hooks, obtain
-  the dialog owner's completed local contract and commit for retained-delegate
-  policy swap with finally restoration, monotonic receipt sequence and policy
-  generation, or an explicit statement that this gap remains unresolved.
+  correlate receipts across operations. The dialog owner supplied completed
+  local correction `2c5790ab4a053217385c1340becacc5e7c59c029` (unpublished):
+  `DialogSubscription.set_policy(policy, scope_token=None)` returns the prior
+  policy and increments generation without attaching, detaching or enabling;
+  `scoped_policy(...)` restores prior policy/token in finally. A caller-owned
+  nonempty token adds no identity allocation. `current_sequence()` is a
+  monotonic event ordinal across policy swaps within one retained subscription
+  lifetime; replacement ends that lifetime. Receipts and snapshots carry
+  policy generation/token, and snapshots expose the current sequence. Future
+  receipt correlation must combine `(start, end]` in that lifetime with active
+  generation/token and existing operation/runtime identities. Closed/unstarted
+  or failed-detach subscriptions stay inactive after swaps. MessageBox and
+  empty/default dialog IDs remain observation-only without message-text fallback.
+  These interfaces are recorded, not imported or wired here. The owner's 62
+  focused tests establish Python behavior; native engine retention remains
+  pending, as do its separate diagnostic corrections.
   Future integration still requires explicit per-operation opt-in after full
   target/document validation, a serialized owner scope, receipt correlation
   and a policy-sensitive admission hash. This dependency note enables no
