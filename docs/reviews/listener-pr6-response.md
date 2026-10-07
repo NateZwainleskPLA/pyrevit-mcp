@@ -121,8 +121,11 @@ Validation commands
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/unit/test_listener_lifecycle.py -q
+# 32 passed
 .\.venv\Scripts\python.exe -m pytest tests/unit -q
+# 106 passed
 git diff --check
+# passed
 ```
 
 Final results are reported with the local correction commit to the coordinator;
