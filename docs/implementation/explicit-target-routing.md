@@ -101,6 +101,12 @@ state. Native retention across engines remains unproven without fixture testing.
 The successful disabled-mode receipt includes `private_runtime_reload_guard=true`
 only after this guard and the complete legacy-route exclusion checks pass. This
 is composition evidence for the private factory, not native lifecycle acceptance.
+The primitive exclusion receipt is a trusted, honest-caller composition
+contract, not an unforgeable proof or security boundary. A caller can fabricate
+the fields; production composition must supply the actual guarded startup
+receipt. The concrete startup guard and retained factory lease remain the
+mechanisms that exclude overlapping execution. No second receipt schema or
+authentication mechanism is introduced here.
 
 Validation and pending coverage
 -------------------------------
