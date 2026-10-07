@@ -180,6 +180,36 @@ def test_no_automatic_registration_or_context_route_signature():
     assert [arg.arg for arg in state.args.args] == ['request']
 
 
+@pytest.mark.parametrize('storage', ['_target', '_Thread__target'])
+@pytest.mark.parametrize('wrapped', [False, True])
+@pytest.mark.parametrize('method_style', ['py3', 'py2'])
+def test_listener_thread_observation_supports_engine_and_server_variants(storage, wrapped, method_style):
+    class HTTPServer:
+        socket = SimpleNamespace(getsockname=lambda: ('127.0.0.1', 48884), fileno=lambda: 7)
+        def serve_forever(self):
+            pass
+    class RoutesServer:
+        server = HTTPServer()
+        def _serve_forever(self):
+            pass
+    active = RoutesServer()
+    target = active._serve_forever if wrapped else active.server.serve_forever
+    if method_style == 'py2':
+        target = SimpleNamespace(im_self=active if wrapped else active.server,
+                                 __name__='_serve_forever' if wrapped else 'serve_forever')
+    worker = SimpleNamespace(name='listener', ident=17, is_alive=lambda: True)
+    setattr(worker, storage, target)
+    active.server_thread = worker
+    unknown = SimpleNamespace(name='target-unavailable', ident=18)
+    ns = dict(get_active_server=lambda: active,
+              threading=SimpleNamespace(active_count=lambda: 2, enumerate=lambda: [worker, unknown]))
+    exec(selected(HOST.read_text(), 'native_listener_snapshot'), ns)
+    result = ns['native_listener_snapshot']()
+    assert result['observable_serve_threads'] == [{'name': 'listener', 'id': 17}]
+    assert result['unobservable_target_threads'] == [{'name': 'target-unavailable', 'id': 18}]
+    assert 'not proof' in result['serve_thread_observation']
+
+
 def receipt_rows():
     return [dict(path='/listener_lifecycle_probe/state', status=200,
                  body=dict(process_id=17, process_started_at=START, stopped=False,
@@ -227,6 +257,40 @@ def test_windows_socket_owner_query_uses_local_python_fixture():
         rows = socket_owner(listener.getsockname()[1])
     assert rows and all(row['process_id'] == os.getpid() for row in rows)
     assert owner_matches(rows, os.getpid(), rows[0]['process_started_at'])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Execute embedded PowerShell with controlled OS doubles')
+def test_windows_owner_query_retains_unreadable_owner_row(monkeypatch):
+    import scripts.listener_lifecycle.collect as module
+    actual_run = module.subprocess.run
+    # Exercise the actual embedded script; only its OS data sources are replaced.
+    fixture = '''
+function Get-NetTCPConnection {
+    [CmdletBinding()] param([string]$State, [int]$LocalPort)
+    [pscustomobject]@{OwningProcess=17; LocalAddress='0.0.0.0'; LocalPort=$LocalPort}
+    [pscustomobject]@{OwningProcess=99; LocalAddress='127.0.0.1'; LocalPort=$LocalPort}
+}
+function Get-Process {
+    [CmdletBinding()] param([int]$Id)
+    if ($Id -eq 17) {
+        [pscustomobject]@{Id=17; StartTime=[datetime]'2026-10-05T12:00:00Z'}
+    } else {
+        [pscustomobject]@{Id=$Id; StartTime=$null}
+    }
+}
+'''
+    def execute(args, **kwargs):
+        args = list(args)
+        args[-1] = fixture + args[-1]
+        return actual_run(args, **kwargs)
+    monkeypatch.setattr(module.subprocess, 'run', execute)
+    rows = socket_owner(48884)
+    assert len(rows) == 2
+    assert rows[1]['process_id'] == 99 and rows[1]['process_started_at'] is None
+    assert rows[1]['local_address'] == '127.0.0.1' and rows[1]['local_port'] == 48884
+    assert rows[1]['ownership_error']
+    assert owner_matches(rows[:1], 17, START)
+    assert not owner_matches(rows, 17, START)
 
 
 def test_collector_persists_partial_receipt_on_ownership_inspection_failure(monkeypatch, tmp_path):

@@ -36,12 +36,19 @@ def native_listener_snapshot():
         result['socket_error'] = str(ex)
     # _target is diagnostic implementation detail, not an ownership contract.
     owners = []
+    unobservable = []
     for candidate in threading.enumerate():
-        target = getattr(candidate, '_target', None)
+        target = getattr(candidate, '_target', getattr(candidate, '_Thread__target', None))
         owner = getattr(target, '__self__', getattr(target, 'im_self', None))
-        if owner is active.server:
+        target_name = getattr(target, '__name__', None)
+        if ((owner is active.server and target_name == 'serve_forever') or
+                (owner is active and target_name == '_serve_forever')):
             owners.append({'name': candidate.name, 'id': candidate.ident})
+        elif target is None:
+            unobservable.append({'name': candidate.name, 'id': candidate.ident})
     result['observable_serve_threads'] = owners
+    result['unobservable_target_threads'] = unobservable
+    result['serve_thread_observation'] = 'best_effort; not proof of worker absence or teardown'
     return result
 
 

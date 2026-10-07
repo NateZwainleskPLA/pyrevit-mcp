@@ -28,10 +28,20 @@ def same_instant(left, right):
 
 def socket_owner(port):
     # Fixed script plus validated integer; no user text is interpolated as shell code.
-    script = """$rows = @(Get-NetTCPConnection -State Listen -LocalPort PORT -ErrorAction Stop |
+    script = """$ErrorActionPreference = 'Stop'
+$rows = @(Get-NetTCPConnection -State Listen -LocalPort PORT -ErrorAction Stop |
     ForEach-Object {
-        $p = Get-Process -Id $_.OwningProcess -ErrorAction Stop
-        @{process_id=$p.Id; process_started_at=$p.StartTime.ToUniversalTime().ToString('o')}
+        $row = @{process_id=$_.OwningProcess; process_started_at=$null;
+            local_address=$_.LocalAddress; local_port=$_.LocalPort}
+        try {
+            $p = Get-Process -Id $_.OwningProcess -ErrorAction Stop
+            $started = $p.StartTime
+            if ($null -eq $started) { throw 'Process start time unavailable' }
+            $row.process_started_at = $started.ToUniversalTime().ToString('o')
+        } catch {
+            $row.ownership_error = $_.Exception.Message
+        }
+        $row
     })
 ConvertTo-Json -InputObject $rows -Compress
 """.replace('PORT', str(int(port)))
@@ -41,7 +51,8 @@ ConvertTo-Json -InputObject $rows -Compress
 
 
 def owner_matches(rows, pid, started_at):
-    return bool(rows) and all(row['process_id'] == pid and
+    return bool(rows) and all(isinstance(row, dict) and
+                             not row.get('ownership_error') and row.get('process_id') == pid and
                              same_instant(row.get('process_started_at'), started_at)
                              for row in rows)
 
