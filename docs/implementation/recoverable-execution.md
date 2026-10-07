@@ -161,6 +161,22 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
 
 - Completed identity, routing, transport and execution-foundation commits are
   integrated; tests exercise their real modules with inert Revit doubles.
+- Adoption of execution-foundation review fixes is pending the owner's completed
+  local contract and commit. Opus PR #3 report `f0bbb53`
+  (`docs/reviews/opus-pr-3.md` in `review-opus-pr-3`) reports F1 closed helper
+  documents falsely marking settled owned work unsafe/unknown, F2 Python wrapper
+  identity misparenting scopes across group rollback, F3 UI facade gating and
+  supplied-document binding errors, and F4/F5 stream compatibility failures.
+  Operations must reconcile F1 before adopting those fixes: a successfully
+  closed non-selected helper document with all owned scopes settled must not
+  falsely quarantine the process. Selected-document loss, pending/unresolved
+  scopes and unknown raw effects still require conservative handling. Integration
+  must also preserve wrapper-equivalent parenting and rollback receipts (F2),
+  exact supplied-document/UI binding in the adapter (F3), and the same retained
+  process safety instance across every mutation path. Do not reset safety to
+  accommodate these fixes. The report's 147 unit and four reproduction tests
+  use doubles/source and provide no native workflow proof. No unfinished fix
+  branch is imported or runtime behavior changed by this dependency note.
 - Startup/private-lease composition and the exclusion receipt are integrated;
   native cross-engine retained-object behavior and accepted-worker draining
   remain unproven. There is no automatic/default private-mode registration.
