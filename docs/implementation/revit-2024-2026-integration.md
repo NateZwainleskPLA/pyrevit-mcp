@@ -233,3 +233,59 @@ No live application script or model-opening operation is used as an installation
 probe. Home bootstrap, UI opening and native transaction/failure-processing
 acceptance remain pending an explicitly supplied disposable fixture. The shared
 safety guard remains enforced and is never cleared by installation or reload.
+
+## Reviewed correction integration, October 7
+
+The user authorized an installation update after the Opus findings were addressed.
+This update merges the actual canonical Origin branches into the existing
+integration branch, preserving application-scoped execution from PR #12.
+It supersedes the earlier pre-review correction inputs listed above.
+
+| PR | Canonical head included |
+| --- | --- |
+| #1 Status API context | `e6de407396ca21e2e7ca0a50132917d2ab18546f` |
+| #2 Structured transport | `223375dedc2c1da283b4f0a2c27786a3b9a4b974` |
+| #3 Execution foundations | `deba1b68d96b4c09d79b2004386bb0f97f4888a4` |
+| #4 Dialog policy and diagnostics | `ae106c430d166536e463eaa1f053812ce755cc65` |
+| #5 Identity and handles | `396e8cbeaa116c57637f0a2262e54d6d4aacc244` |
+| #6 Listener diagnostics | `84909a4c681c9eb167d56c35ddcb73f33500531d` |
+| #7 Explicit routing | `fabc191ce369f39cdec31659c5d0448bf5fcc8ec` |
+| #8 Recoverable operations | `75433b24341ea3299c2ca43827b816f62c9e3630` |
+
+The PR #8 branch includes the actual canonical status, transport, execution,
+identity and routing ancestors. It is merged normally, alongside the independent
+dialog and listener branches. Three operations conflicts with the integration's
+earlier stop/expiry fix were resolved to the reviewed source, regression test
+and current contract. Expiry now records provably unentered queued work as
+canceled with no effects; running work retains its final outcome. Application
+execution and the installation updater merged unchanged. No PR or master branch
+is merged, closed or rewritten by this integration update.
+
+The resulting build passes **751 tests**, with **15 native tests skipped**.
+Compilation, `pip check` and whitespace checks pass. Sixteen native-side modules
+also compile with installed IronPython 2.7.12 in a separate PowerShell process;
+this is compile-only evidence, without imports, script evaluation or Revit.
+The MCP client still registers **25 tools**, including both application-scoped
+execution tools. All eight canonical heads and PR #12's implementation are
+verified ancestors of the integration build.
+
+This brings in the reviewed routing error/receipt checks, process-retained guard
+handling, operation journal capacity and archive bounds, atomic safety reads,
+and submit rejection diagnostics that preserve prior committed effects evidence.
+Dialog scope conflicts now disable the policy, while listener tooling reports
+inaccessible owners and the installed-source baseline conservatively. These
+modules remain subject to their documented native and activation limits:
+the private runner is opt-in and unregistered, the dialog catalog is empty,
+and no listener probe is activated. For inactive-document scripts, delegated
+`revit.carryout` and `revit.DryTransaction` still need an explicit document;
+use owned execution scopes for tracked transaction effects.
+
+The dispatcher update preserves the exact legacy startup/local guards, client
+configuration, persistent target directory and Revit 2024–2026 version scope.
+It backs up the previous dispatcher and records the new source commit in a
+fresh installation manifest. Cached metadata and a fresh MCP stdio tool session
+verify installation without opening or modifying a model. Existing Revit
+processes retain loaded code and safety state; fully restart them after saving
+work to load this build. Installation does not reset safety or force a restart.
+Native transaction, document wrapper, UI, reload/lifetime and journal durability
+acceptance remain pending disposable-host validation.
