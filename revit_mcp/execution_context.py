@@ -29,6 +29,21 @@ def retained_contexts():
     return tuple(_retained_contexts)
 
 
+def _same_document(first, second):
+    """Compare native document wrappers without trusting Python identity alone."""
+    if first is second:
+        return True
+    # Either wrapper may be a proxy or may already be invalid. An exception
+    # never establishes equality; the identical-object case remains reliable.
+    for left, right in ((first, second), (second, first)):
+        try:
+            if left.Equals(right):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 class OwnedScope(object):
     def __init__(self, context, document, name, kind, managed=False):
         self.context = context
@@ -69,6 +84,7 @@ class ExecutionContext(object):
         if selected_document is not None:
             self.documents.append(selected_document)
         self.cleanup_errors = []
+        self.document_notes = []
         self.checks = []
         self.unsafe = False
         self.script_started = False
@@ -111,12 +127,12 @@ class ExecutionContext(object):
         # Native transactions cannot nest. Nested rollback groups can contain
         # ordinary transactions; group rollback undoes their committed changes.
         scope.parent = next((item for item in reversed(self.active)
-                             if item.document is scope.document), None)
+                             if _same_document(item.document, scope.document)), None)
         factory = self.db.TransactionGroup if scope.kind == "rollback" else self.db.Transaction
         scope.native = factory(scope.document, scope.name)
         self.scopes.append(scope)
         self.active.append(scope)  # register BEFORE Start; it may raise after starting
-        if not any(doc is scope.document for doc in self.documents):
+        if not any(_same_document(doc, scope.document) for doc in self.documents):
             self.documents.append(scope.document)
         try:
             returned = scope.native.Start()
@@ -226,7 +242,16 @@ class ExecutionContext(object):
             self._finish(scope, rollback=True)
         for document in self.documents:
             try:
-                if not document.IsValidObject or document.IsModifiable:
+                if not document.IsValidObject:
+                    selected = _same_document(document, self.document)
+                    unresolved = any(_same_document(scope.document, document) for scope in self.active)
+                    if not selected and not unresolved:
+                        # A family-edit workflow may close its secondary doc
+                        # after every owned scope has settled. Keep its receipts.
+                        self.document_notes.append({"stage": "document_closed"})
+                        continue
+                    raise UnsafeDocumentError("Selected document or document with an unresolved owned scope is invalid")
+                if document.IsModifiable:
                     raise UnsafeDocumentError("Document postcondition is invalid or still modifiable")
             except BaseException as error:
                 self.cleanup_errors.append({"stage": "document_postcondition", "error": safe_text(error)})
@@ -252,4 +277,5 @@ class ExecutionContext(object):
             overall = "unknown"
         return {"effects": overall, "owned_effects": owned, "unsafe": self.unsafe,
                 "transaction_receipts": [dict(scope.receipt) for scope in self.scopes],
-                "checks": list(self.checks), "cleanup_errors": list(self.cleanup_errors)}
+                "checks": list(self.checks), "cleanup_errors": list(self.cleanup_errors),
+                "document_notes": [dict(note) for note in self.document_notes]}

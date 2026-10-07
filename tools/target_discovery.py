@@ -20,7 +20,15 @@ def registration_directory():
 def configured_candidates():
     """Extension JSON bridges native registration to CPython without unpickling."""
     candidates = []
-    for path in sorted(registration_directory().glob("*.json"))[:256]:
+    records = []
+    for path in registration_directory().glob("*.json"):
+        try:
+            records.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    # Recent live evidence must not be excluded by low stale PID filenames.
+    records.sort(key=lambda item: (item[0], str(item[1])), reverse=True)
+    for _, path in records[:256]:
         try:
             if path.stat().st_size > 65536:
                 continue
@@ -89,33 +97,47 @@ class TargetDiscovery:
         return snapshot
 
     async def discover(self):
-        # Registration records take precedence over port-range probes, and cannot
-        # be bypassed by a duplicate unregistered candidate at the same endpoint.
+        # Records are discovery hints. Validate each against the same handshake;
+        # stale evidence must not veto a matching live record on a reused port.
         candidates = self.candidates() if callable(self.candidates) else self.candidates
         unique = {}
         for candidate in list(candidates)[:512]:
             endpoint = endpoint_url(candidate["endpoint"])
-            existing = unique.get(endpoint)
-            if existing is None or (candidate.get("registration") and not existing.get("registration")):
-                unique[endpoint] = candidate
+            unique.setdefault(endpoint, []).append(candidate)
         limit = asyncio.Semaphore(16)
 
-        async def probe(endpoint, candidate):
+        async def probe(endpoint, candidates):
             async with limit:
                 try:
                     snapshot = await self.verified_handshake(endpoint)
+                    data = validate_snapshot(snapshot)
+                    matching, stale = [], []
+                    for candidate in candidates:
+                        record = candidate.get("registration")
+                        if record and any(record[key] != data[key] for key in
+                                          ("instance_id", "runtime_id", "process_id", "process_started_at", "endpoint")
+                                          if key in record):
+                            stale.append(dict(endpoint=endpoint, error_code="stale_registration",
+                                              error="Registration no longer matches live endpoint ownership",
+                                              process_id=record.get("process_id")))
+                        else:
+                            matching.append(candidate)
+                    # A successful independent metadata/ownership proof remains
+                    # usable even if every persisted record is stale.
+                    candidate = next((c for c in matching if c.get("registration")),
+                                     next(iter(matching), dict(source="metadata_handshake")))
                     result = self.directory.observe(snapshot, expected_endpoint=endpoint,
                                                     registration=candidate.get("registration"))
                     result["discovery_source"] = candidate.get("source", "configured")
-                    return result, None
+                    return result, stale
                 except Exception as error:
-                    return None, dict(endpoint=endpoint, error_code=getattr(error, "code", "discovery_failed"),
-                                      error=str(error) or type(error).__name__)
+                    return None, [dict(endpoint=endpoint, error_code=getattr(error, "code", "discovery_failed"),
+                                       error=str(error) or type(error).__name__)]
 
         results = await asyncio.gather(*(probe(endpoint, candidate) for endpoint, candidate in unique.items()))
         return dict(namespace=self.directory.namespace,
                     targets=[target for target, error in results if target is not None],
-                    errors=[error for target, error in results if error is not None])
+                    errors=[error for target, errors in results for error in errors])
 
     async def revalidate(self, target):
         return await self.directory.revalidate(target, self.verified_handshake)
