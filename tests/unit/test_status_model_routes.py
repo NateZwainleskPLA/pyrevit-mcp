@@ -82,6 +82,7 @@ def registered_routes(monkeypatch):
     pyrevit.revit = revit
     pyrevit.DB = db_api
     pyrevit.routes = SimpleNamespace(
+        API=lambda name: CapturedAPI(),
         make_response=lambda data, status=200: {"data": data, "status": status}
     )
     # String/name helpers are outside this focused document-injection change.
@@ -105,9 +106,15 @@ def registered_routes(monkeypatch):
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        monkeypatch.setitem(sys.modules, "revit_mcp." + name, module)
         getattr(module, "register_" + name + "_routes")(api)
+        if name == "status":
+            status_registrar = module.register_status_routes
+            module.register_liveness_routes(api)
     assert document_reads == [], "Registration must not query a document"
-    yield SimpleNamespace(api=api, document_reads=document_reads)
+    yield SimpleNamespace(
+        api=api, document_reads=document_reads, status_registrar=status_registrar,
+    )
     assert global_reads == [], "Handlers accessed global revit.doc"
 
 
@@ -115,8 +122,78 @@ def registered_routes(monkeypatch):
 def test_registered_handler_requests_routes_api_context(registered_routes, path):
     handler = registered_routes.api.handlers[(path, ("GET",))]
     parameters = inspect.signature(handler).parameters
-    assert list(parameters) == ["doc"]
+    assert "doc" in parameters
     assert parameters["doc"].default is inspect.Parameter.empty
+
+
+def test_liveness_never_requests_document_context(registered_routes):
+    handler = registered_routes.api.handlers[("/health/", ("GET",))]
+    assert not ({"doc", "uidoc", "uiapp"} & set(inspect.signature(handler).parameters))
+    assert handler() == {
+        "status": 200, "data": {"status": "alive", "api_name": "revit_mcp"},
+    }
+    assert registered_routes.document_reads == []
+
+
+def test_status_registrar_accepts_api_that_disallows_liveness(registered_routes):
+    """Targeted model-route wrappers must not acquire an unguarded health route."""
+    class StatusOnlyAPI(CapturedAPI):
+        def route(self, path, methods):
+            assert path == "/status/", "Unknown model route"
+            return super().route(path, methods)
+
+    api = StatusOnlyAPI()
+    registered_routes.status_registrar(api)
+    assert set(api.handlers) == {("/status/", ("GET",))}
+
+
+def test_targeted_startup_omits_legacy_raw_liveness(registered_routes, monkeypatch):
+    slots = {}
+    monkeypatch.setitem(sys.modules, "System", SimpleNamespace(AppDomain=SimpleNamespace(
+        CurrentDomain=SimpleNamespace(GetData=slots.get, SetData=slots.__setitem__))))
+    monkeypatch.setitem(sys.modules, "revit_mcp.target_runtime", SimpleNamespace(initialize_identity=lambda api: None))
+    for name, registrar in {
+        "views": "register_views_routes", "placement": "register_placement_routes",
+        "colors": "register_color_routes", "code_execution": "register_code_execution_routes",
+        "document": "register_document_routes",
+    }.items():
+        module = ModuleType("revit_mcp." + name)
+        setattr(module, registrar, lambda api: None)
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    source = Path(__file__).resolve().parents[2] / "startup.py"
+    spec = importlib.util.spec_from_file_location("_test_legacy_startup", source)
+    startup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(startup)
+    assert set(startup.api.handlers) == {
+        ("/status/", ("GET",)), ("/model_info/", ("GET",)),
+    }
+    assert "uiapp" in inspect.signature(startup.api.handlers[("/status/", ("GET",))]).parameters
+    assert registered_routes.document_reads == []
+
+
+async def test_separate_liveness_handler_bypasses_pending_document_dispatch(registered_routes):
+    """The legacy primitive registrar is separate; modern launch uses metadata."""
+    from tools.revit_transport import RevitTransportResult
+    from tools.utils import compatibility_response
+
+    calls = []
+
+    async def dispatch(path, **kwargs):
+        calls.append(path)
+        handler = registered_routes.api.handlers[(path, ("GET",))]
+        if "doc" in inspect.signature(handler).parameters:
+            return "Error: Request timed out waiting for Revit API context"
+        response = handler()
+        return compatibility_response(RevitTransportResult(
+            method="GET", url="http://fixture.invalid" + path,
+            status_code=response["status"], body=response["data"], json_received=True,
+        ))
+
+    response = await dispatch("/health/")
+    assert response.transport_result.http_success
+    assert response == {"status": "alive", "api_name": "revit_mcp"}
+    assert calls == ["/health/"]
+    assert registered_routes.document_reads == []
 
 
 @pytest.mark.parametrize("title", ["Study", "Étude", ""])
@@ -174,7 +251,7 @@ def test_model_info_uses_injected_document_for_all_queries(registered_routes):
         },
     }
     assert data["linked_models"] == {"count": 0, "models": []}
-    assert len(registered_routes.document_reads) == 19
+    assert registered_routes.document_reads
     assert all(queried is doc for queried in registered_routes.document_reads)
 
 

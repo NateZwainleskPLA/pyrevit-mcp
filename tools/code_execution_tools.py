@@ -52,7 +52,7 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         - doc: The explicitly targeted Revit document
         - uidoc: Supplied UIDocument only with allow_ui_change=true and routing validation
         - DB: Revit API Database namespace
-        - revit: pyRevit module
+        - revit: Facade with supplied doc, gated UI properties and bound transaction defaults
         - execution: Owned transaction/rollback scopes and cooperative checkpoints
         - eid, id_of, name_of, to_json: Revit/IronPython conversion helpers
         - json: Local adapter for supported Revit/.NET values
@@ -81,7 +81,8 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         a diagnostic basename, never a server-side file path. Use IronPython 2.7
         syntax; no f-strings. Imports of json shadow the local adapter: use to_json.
 
-        For UI operations that cannot run inside a transaction (e.g. switching the active view):
+        For UI operations that cannot run inside a transaction, such as switching
+        the active view (requires allow_ui_change=True):
             all_views = DB.FilteredElementCollector(doc).OfClass(DB.View).ToElements()
             target = next((v for v in all_views if v.Name == "Level 1"), None)
             if target:

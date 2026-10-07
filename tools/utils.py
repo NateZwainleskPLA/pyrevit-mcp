@@ -103,7 +103,11 @@ def compatibility_response(result: RevitTransportResult):
 def _format_transport(result):
     if result.failure_kind:
         if result.failure_kind == "timeout":
-            message = "Error: Request timed out."
+            duration = (" after {:g} seconds".format(result.timeout_seconds)
+                        if result.timeout_seconds is not None else "")
+            message = "Error: Request timed out{}.".format(duration)
+        elif result.failure_kind == "request_error":
+            message = "Error: Request could not be built: {}".format(result.error)
         elif result.failure_kind == "connection_error":
             message = "Error: Connection to Revit failed: {}".format(result.error)
         elif result.failure_kind == "invalid_json":
@@ -111,24 +115,28 @@ def _format_transport(result):
         else:
             message = "Error: Transport failure: {}".format(result.error)
         if result.mutation_outcome_unknown:
-            message += (" The mutation outcome is unknown; the operation may still be running in Revit."
-                        " Inspect the original operation before submitting again.")
+            message += (" The request may still be running in Revit."
+                        " If this request changes the model, verify model state before resubmitting.")
         if result.status_code is not None:
             message += "\nHTTP {}\n{}".format(result.status_code, result.response_text)
         return message
 
-    if isinstance(result.body, dict):
+    if result.kind == "empty_response":
+        text = "Empty response received."
+    elif isinstance(result.body, dict):
         text = format_response(result.body)
     else:
         text = json.dumps(result.body, indent=2, ensure_ascii=False)
-    if result.status_code is None:
-        return text
-    if result.status_code != 200:
+    if result.status_code is not None and result.status_code != 200:
+        exception = result.body.get("exception") if isinstance(result.body, dict) else None
+        if result.status_code == 408 and isinstance(exception, dict) and "message" in exception:
+            return "Error: pyRevit route handler exception (HTTP 408)\n{}".format(text)
         try:
             phrase = HTTPStatus(result.status_code).phrase
         except ValueError:
             phrase = ""
-        return "HTTP {} {}\n{}".format(result.status_code, phrase, text).strip()
+        prefix = "" if result.http_success else "Error: "
+        return "{}HTTP {} {}\n{}".format(prefix, result.status_code, phrase, text).strip()
     return text
 
 
@@ -146,6 +154,8 @@ def format_response(response):
     if isinstance(response, (RevitResponse, RevitResponseText)):
         return _format_transport(response.transport_result)
     if isinstance(response, dict):
+        exception = response.get("exception")
+        native_exception = isinstance(exception, dict) and "message" in exception
         # Check for different success patterns
         status = str(response.get("status") or "").lower()
         health = str(response.get("health") or "").lower()
@@ -155,7 +165,7 @@ def format_response(response):
                      (status == "active" and health == "healthy") or
                      (status == "active" and "revit_available" in response and response["revit_available"]))
 
-        if is_success:
+        if is_success and not native_exception:
             # For successful responses, return the most relevant data
             if "output" in response:  # Code execution responses
                 return _format_success_value(response["output"], response)
@@ -189,17 +199,19 @@ def format_response(response):
                 return "\n".join(status_parts)
             else:
                 return json.dumps(response, indent=2)
-        elif status in RECOVERABLE_STATUSES:
+        elif status in RECOVERABLE_STATUSES and not native_exception:
             # Documented, expected, non-error outcome -- render it neutrally
             # instead of dressing it up as a crash. See RECOVERABLE_STATUSES.
             return _format_recoverable(response)
-        elif not status and not response.get("error") and not response.get("traceback"):
+        elif (not status and not response.get("error") and not response.get("traceback")
+              and "exception" not in response):
             # Metadata and operation receipts need not use the legacy status
             # field. Preserve them as JSON rather than invent an error.
             return json.dumps(response, indent=2, default=str, ensure_ascii=False)
         else:
             # Error case - provide verbose debugging information
-            error_msg = (response.get("error") or
+            error_msg = ((exception.get("message") if native_exception else None) or
+                         response.get("error") or
                          response.get("message") or
                          "Unknown error occurred")
             traceback_info = response.get("traceback", "")
@@ -209,6 +221,8 @@ def format_response(response):
             # Build comprehensive error message
             error_parts = ["=== ERROR DETAILS ==="]
             error_parts.append("Status: {}".format(status))
+            if native_exception and "source" in exception:
+                error_parts.append("Source: {}".format(exception["source"]))
             error_parts.append("Error: {}".format(error_msg))
 
             if details:
