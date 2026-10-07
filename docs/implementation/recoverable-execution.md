@@ -184,8 +184,14 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
   load/close and another admission, equivalent-wrapper group rollback, selected
   document loss and a closed helper with a pending scope. The same safety
   instance is retained; no adapter changes or safety reset were necessary.
-  F3-F5 remain pending their own completed corrections. No unfinished fix branch
-  is imported, no remote ref changed, and native Equals/Close/Pending behavior
+  Completed F3 correction `85a6a193c7e2102fd080c45f8dcc5e2037100b3c` is
+  integrated in the same isolated branch as `40706f9`. Adapter regressions
+  confirm inactive selected-document defaults for the untracked pyRevit
+  Transaction/TransactionGroup conveniences, withheld UI getters, explicit
+  supplied-UIDocument view updates, and rejected view assignment without UI
+  permission. No host-active fallback or operations adapter change is needed.
+  F4/F5 remain pending their own completed corrections. No unfinished fix branch
+  is imported, no remote ref changed, and native Equals/Close/Pending/UI behavior
   remains unproven by these inert tests.
 - Startup/private-lease composition and the exclusion receipt are integrated;
   native cross-engine retained-object behavior and accepted-worker draining

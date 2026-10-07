@@ -1,4 +1,5 @@
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -173,3 +174,68 @@ def test_closed_helper_with_pending_scope_still_quarantines_operations(execution
     assert engine.quarantined and adapter.safety.snapshot()["blocked"]
     assert not execution_route.DB.created[0].disposed
     assert not engine.command_running
+
+
+def test_inactive_facade_helpers_bind_selected_doc_and_withhold_ui(execution_route):
+    execution_route.DB = FakeDB()
+    engine, adapter, reg, uiapp, request, selected, active = setup(execution_route.execute_payload)
+    uiapp.ActiveUIDocument = SimpleNamespace(Document=active)
+    calls = []
+    execution_route.revit = SimpleNamespace(
+        doc=active, uidoc=uiapp.ActiveUIDocument, active_view="host view",
+        active_ui_view="host UI view", docs=(active,),
+        Transaction=lambda name, doc: calls.append(("transaction", doc)),
+        TransactionGroup=lambda name, doc: calls.append(("group", doc)))
+    request["code"] = ("assert revit.doc is doc\nassert revit.docs == (doc,)\n"
+                       "assert uidoc is None and revit.uidoc is None\n"
+                       "assert revit.active_view is None and revit.active_ui_view is None\n"
+                       "revit.Transaction('bound')\nrevit.TransactionGroup('bound', None)")
+    engine.submit(request)
+    engine.on_external_event(uiapp)
+    receipt = engine.store.inspect("one")
+    assert receipt["state"] == "succeeded" and receipt["effects"] == "unknown"
+    assert calls == [("transaction", selected), ("group", selected)]
+    assert uiapp.ActiveUIDocument.Document is active
+    assert execution_route.revit.doc is active
+    assert not adapter.safety.snapshot()["blocked"]
+
+
+def test_opted_in_facade_view_updates_only_supplied_uidoc(execution_route):
+    execution_route.DB = FakeDB()
+    engine, adapter, reg, uiapp, request, selected, other = setup(execution_route.execute_payload)
+    uidoc = uiapp.ActiveUIDocument
+    selected.new_view = SimpleNamespace(Id=42)
+    matching_ui_view = SimpleNamespace(ViewId=42)
+    uidoc.ActiveView = SimpleNamespace(Id=11)
+    uidoc.GetOpenUIViews = lambda: [SimpleNamespace(ViewId=11), matching_ui_view]
+    execution_route.revit = SimpleNamespace(doc=other, active_view="host view")
+    request.update(allow_ui_change=True, code=(
+        "assert revit.doc is doc and revit.uidoc is uidoc\n"
+        "revit.active_view = doc.new_view\n"
+        "assert revit.active_view is uidoc.ActiveView\n"
+        "assert revit.active_ui_view.ViewId == doc.new_view.Id"))
+    safety = adapter.safety
+    engine.submit(request)
+    engine.on_external_event(uiapp)
+    receipt = engine.store.inspect("one")
+    assert receipt["state"] == "succeeded"
+    assert uidoc.ActiveView is selected.new_view
+    assert execution_route.revit.active_view == "host view"
+    assert adapter.safety is safety and not safety.snapshot()["blocked"]
+
+
+def test_withheld_facade_view_assignment_fails_without_host_fallback(execution_route):
+    execution_route.DB = FakeDB()
+    engine, adapter, reg, uiapp, request, selected, other = setup(execution_route.execute_payload)
+    uidoc = uiapp.ActiveUIDocument
+    uidoc.ActiveView = "supplied view"
+    execution_route.revit = SimpleNamespace(doc=other, active_view="host view")
+    request["code"] = "revit.active_view = 'forbidden'"
+    engine.submit(request)
+    engine.on_external_event(uiapp)
+    receipt = engine.store.inspect("one")
+    assert receipt["state"] == "failed"
+    assert receipt["result"]["error_type"] == "AttributeError"
+    assert "allow_ui_change" in receipt["result"]["error"]
+    assert uidoc.ActiveView == "supplied view" and execution_route.revit.active_view == "host view"
+    assert not adapter.safety.snapshot()["blocked"]
