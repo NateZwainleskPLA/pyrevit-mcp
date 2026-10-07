@@ -84,6 +84,12 @@ are integrated. The factory primes retained ownership and holds the actual
 `startup_owner_guard()` through private construction, and requires the receipt
 marker. Tests consume the actual guarded startup receipt, create an inert event,
 and verify subsequent synchronous reload fails before identity/route changes.
+This is a TRUSTED COMPOSITION/HONEST CALLER contract: a plain exclusion receipt
+is not a security/proof token. The caller must supply the actual guarded startup
+receipt after establishing all handler exclusions; the factory cannot authenticate
+that assertion. The real startup owner guard, SAME retained safety and lease
+checks are enforced independently. Guard exceptions from prior module/engine
+classes still fail cached admission closed with known no new effects.
 
 Stream capture has a trusted configurable retained-character limit during
 execution. Receipt truncation preserves structured errors, script location,

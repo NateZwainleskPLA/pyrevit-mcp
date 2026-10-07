@@ -46,6 +46,17 @@ objects with inert host doubles. No native acceptance is implied.
   not introduced as another identity or registration schema. The receipt is
   an integration assertion; the real startup guard and retained lease remain
   mandatory, and listener/native evidence still gates adoption.
+- **C1 resolved.** Cached admission handles failed checks from a prior module's
+  retained guard without depending on imported exception-class identity. The
+  SAME guard is retained and never reset. A foreign-module guard regression
+  confirms HTTP 503 `host_quarantined`, `effects=none`, and no queue/event entry.
+- **C2 explicitly scoped to trusted, honest composition.** The exclusion receipt
+  is a plain caller-provided assertion, not an authenticated proof/security
+  token. The trusted composition owner must supply the actual guarded startup
+  receipt and establish all request-only exclusions. Startup owner guard,
+  retained safety identity and one-owner lease enforcement still apply; this
+  PR does not claim to resist a caller fabricating the receipt. No additional
+  identity/owner schema or default/private activation is introduced.
 
 Final publication must use the UPDATED canonical Origin routing parent and
 inherit its published identity/transport/execution corrections. Only owned

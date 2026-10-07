@@ -259,10 +259,12 @@ class NativeExecutionAdapter(object):
 
     def admit_cached(self, payload):
         self.validate_cached(payload)
-        from .execution_safety import MutationBlockedError
         try:
             self.safety.require_safe()
-        except MutationBlockedError as error:
+        except BaseException as error:
+            # Retained guards can come from a prior module/engine. Class
+            # identity is not a reliable admission contract; any failed guard
+            # check must fail closed before queue visibility/executor entry.
             raise OperationError("host_quarantined", safe_text(error), 503)
         known, safe = self._host_safety
         if not known or not safe:
@@ -330,6 +332,11 @@ class NativeExecutionAdapter(object):
 
 
 def _require_exclusion_receipt(receipt):
+    """Trusted composition assertion, not a security/proof token.
+
+    The honest composition owner supplies the actual guarded startup receipt;
+    this plain dictionary cannot authenticate excluded handlers by itself.
+    """
     from .routing_policy import ROUTES
     required = set(path for path in ROUTES if not path.startswith("/operations/"))
     required.discard("/get_view/")

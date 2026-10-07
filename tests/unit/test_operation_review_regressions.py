@@ -1,6 +1,6 @@
 """Inverted Opus PR8 cases: real registry/journal/runner, inert host only."""
 import threading
-from types import SimpleNamespace
+from types import SimpleNamespace, ModuleType
 
 import pytest
 
@@ -11,6 +11,8 @@ from revit_mcp.operation_store import (
     JOURNAL_ENVELOPE_RESERVE,
 )
 from tests.unit.test_operation_runtime import runtime, payload
+from tests.unit.test_execution_identity_integration import setup
+from revit_mcp.execution_routes import register_execution_routes
 
 
 def shared_engine(store):
@@ -186,3 +188,34 @@ def test_failed_api_observation_invalidates_previous_safe_snapshot():
     with pytest.raises(RuntimeError):
         adapter.observe_safety_api(SimpleNamespace(Application=SimpleNamespace(Documents=broken())))
     assert adapter._host_safety == (False, False)
+
+
+def test_foreign_module_retained_guard_rejects_admission_with_known_no_effects():
+    foreign = ModuleType("retired_engine.execution_safety")
+    exec("class MutationBlockedError(Exception): pass\n"
+         "class RetainedGuard:\n"
+         "    calls = 0\n"
+         "    def require_safe(self):\n"
+         "        self.calls += 1\n"
+         "        raise MutationBlockedError('retained host remains blocked')\n", foreign.__dict__)
+    engine, adapter, registry, uiapp, request, selected, other = setup()
+    retained = foreign.RetainedGuard()
+    adapter.safety = retained
+    handlers = {}
+
+    class API:
+        def route(self, path, methods):
+            def register(handler):
+                handlers[path] = handler
+                return handler
+            return register
+
+    register_execution_routes(API(), engine, lambda **kwargs: kwargs)
+    response = handlers["/operations/submit/"](SimpleNamespace(data=request))
+    assert response["status"] == 503
+    assert response["data"]["error_code"] == "host_quarantined"
+    assert response["data"]["effects"] == "none"
+    assert response["data"]["actual_target"]["runtime_id"] == request["runtime_id"]
+    assert adapter.safety is retained and retained.calls == 1
+    assert not engine.store.records and not engine.store.has_queued()
+    assert engine.event.raises == 0
