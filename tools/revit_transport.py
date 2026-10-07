@@ -42,6 +42,9 @@ class RevitTransportResult:
         """
         if not self.json_received or not isinstance(self.body, dict):
             return False
+        exception = self.body.get("exception")
+        if isinstance(exception, dict) and "message" in exception:
+            return True
         status = self.body.get("status")
         return (isinstance(status, str) and
                 (status.lower() in {"error", "failed"} or

@@ -165,3 +165,35 @@ async def test_transport_formatting_does_not_mutate_body():
     assert "=== ERROR DETAILS ===" not in format_response(result)
     assert result.body == response == body
     assert "status_code" not in response and "transport_result" not in response
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("status", [408, 500])
+async def test_native_pyrevit_exception_is_an_error_not_a_timeout(method, status, install_http):
+    body = {"exception": {"source": "Autodesk Revit 2025",
+                          "message": "InvalidOperationException\nScript Executor Traceback: script.py:8"},
+            "target": "r17", "effects": "unknown"}
+    requests = install_http(lambda request: httpx.Response(status, json=body))
+    result = await main._revit_call(method, "/place_family/", data={})
+    assert result.revit_error and result.kind == "revit_error"
+    assert result.failure_kind is None and result.body == body
+    for view in (result, compatibility_response(result), dict(body)):
+        text = format_response(view)
+        assert "=== ERROR DETAILS ===" in text
+        assert "Source: Autodesk Revit 2025" in text
+        assert "Error: InvalidOperationException" in text
+        assert "Script Executor Traceback: script.py:8" in text
+        assert "r17" in text and "unknown" in text
+        assert "Request Timeout" not in text
+        if not isinstance(view, dict) or hasattr(view, "transport_result"):
+            assert text.startswith("Error:")
+            assert "HTTP {}".format(status) in text
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("status", [302, 404, 409, 503])
+async def test_every_non_2xx_json_result_is_error_prefixed(status, install_http):
+    install_http(lambda request: httpx.Response(status, json={"detail": "endpoint response"}))
+    response = await main.revit_get("/status/")
+    assert format_response(response).startswith("Error: HTTP {}".format(status))
+    assert response.transport_result.body == {"detail": "endpoint response"}
