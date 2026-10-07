@@ -142,8 +142,8 @@ version/snapshot/generation checks. The status owner is reconciling these
 completed transport commits with `2eb54f6` locally in its own checkout on
 `local/status-transport-readiness`. Its `/health/` waiter needs HTTP 200, received
 JSON, `api_name='revit_mcp'` and `status='alive'`; HTTP 503 is not readiness.
-That composition is not yet a completed dependency here. Even its valid health
-receipt establishes listener liveness only.
+That composition is now complete locally, as recorded below. Even its valid
+health receipt establishes listener liveness only.
 
 No automatic cherry-pick is performed. Future integration must distinguish the
 M1 transport correction from overlapping legacy M2/status hunks, retain modern
@@ -206,3 +206,44 @@ inside `startup_owner_guard`, before any registration or expiration. It must
 never call the legacy wrapper or register raw health through `TargetedAPI`.
 This is a planned dependency contract, not a completed identity correction;
 integration still waits for the owner's finished local hash/tests.
+
+## Completed local status/transport reconciliation
+
+The status owner supplied
+`2885aeb3fc7fcfe03a9ab6acca9a0318547b41f0` on
+`local/status-transport-readiness`, with 182 unit tests and an 18-case real
+MockTransport/request/compatibility/poller matrix. It reconciles the completed
+legacy M2 correction with status `2eb54f6` and replayed transport foundations/M1.
+It does not include unfinished identity or execution work.
+
+The final `/health/` waiter accepts only `response.transport_result` evidence:
+HTTP 200, received JSON, a dictionary body, no `revit_error`,
+`api_name='revit_mcp'` and `status='alive'`. There is no bare-dictionary check,
+HTTP 503 allowance, `Error: 5` string rule or endpoint fallback. Tests reject
+foreign HTTP 200, spoofed 404/500/503, native 408, native errors carrying alive
+fields, malformed/non-object/empty JSON and 202 receipts. The separate raw
+liveness registrar and status API-context dispatch tests remain intact.
+
+If legacy waiter integration is later authorized, preserve this strict health
+predicate and matching fixture/test paths when resolving the overlapping
+status/M2 hunks. Discard connector-503 readiness. Do not import these legacy
+launch hunks over modern `/metadata/` discovery and exact child PID/start/version,
+initialized document snapshot and final full-ID validation. Identity's F1c
+wrapper remains a separate unfinished dependency. Targeted/disabled startup
+continues strict identity initialization under `startup_owner_guard`, without
+raw health registration through `TargetedAPI`.
+
+This completion is recorded, not adopted. Routing source and remote refs are
+unchanged; no push, remote PR edit, deployment or native check is performed.
+
+## Completed execution correction, partial series
+
+Execution owner supplied `8591295fdea4400081e304d07c1d3990f2c46201`, directly
+after canonical PR #3 `10ec37d`, for F1/F2. Context/payload signatures are
+unchanged; `document_notes` records a closed non-selected helper document with
+no active owned scope. Selected-document loss, unresolved scope loss and a
+still-modifiable valid document remain unsafe. Native `Equals`-aware document
+comparison fixes owned group/child parenting. The owner reports 40 focused
+tests. Facade/capture corrections are still forthcoming. Routing awaits those
+completed contracts before consumer composition; no unfinished branch or
+partial correction is imported by this documentation update.
