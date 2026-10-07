@@ -2,6 +2,9 @@
 """Utility functions for MCP tools"""
 
 import json
+from http import HTTPStatus
+
+from .revit_transport import RevitResponse, RevitResponseText, RevitTransportResult
 
 
 # Statuses that are valid, expected, recoverable outcomes -- NOT errors.
@@ -33,6 +36,9 @@ RECOVERABLE_STATUSES = frozenset({
     "active_no_document",
     # Generic non-error signals
     "ok", "warning",
+    # Admission/pending outcomes are receipts, not execution failures.
+    "accepted", "queued", "running", "waiting_for_user", "canceled",
+    "unknown_after_restart",
 })
 
 
@@ -69,35 +75,106 @@ def _format_recoverable(response):
     return "\n".join(parts)
 
 
+def _format_success_value(value, response):
+    """Keep concise output while making receiver identity/effects observable."""
+    metadata_fields = {
+        "actual_target", "target", "document", "instance_id", "runtime_id", "document_id",
+        "effects", "operation_id", "state", "partial_output", "traceback",
+    }
+    metadata = {key: val for key, val in response.items() if key in metadata_fields}
+    text = str(value)
+    if metadata:
+        text += "\n\n=== RESPONSE METADATA ===\n" + json.dumps(
+            metadata, indent=2, default=str, ensure_ascii=False, sort_keys=True)
+    return text
+
+
+def compatibility_response(result: RevitTransportResult):
+    """Keep dictionary/text consumers compatible without discarding metadata.
+
+    New internal consumers use RevitTransportResult directly. This view exposes
+    that result through .transport_result, without adding keys to Revit JSON.
+    """
+    if result.json_received and isinstance(result.body, dict):
+        return RevitResponse(result)
+    return RevitResponseText(_format_transport(result), result)
+
+
+def _format_transport(result):
+    if result.failure_kind:
+        if result.failure_kind == "timeout":
+            duration = (" after {:g} seconds".format(result.timeout_seconds)
+                        if result.timeout_seconds is not None else "")
+            message = "Error: Request timed out{}.".format(duration)
+        elif result.failure_kind == "request_error":
+            message = "Error: Request could not be built: {}".format(result.error)
+        elif result.failure_kind == "connection_error":
+            message = "Error: Connection to Revit failed: {}".format(result.error)
+        elif result.failure_kind == "invalid_json":
+            message = "Error: Revit endpoint returned a malformed or non-JSON response."
+        else:
+            message = "Error: Transport failure: {}".format(result.error)
+        if result.mutation_outcome_unknown:
+            message += (" The request may still be running in Revit."
+                        " If this request changes the model, verify model state before resubmitting.")
+        if result.status_code is not None:
+            message += "\nHTTP {}\n{}".format(result.status_code, result.response_text)
+        return message
+
+    if result.kind == "empty_response":
+        text = "Empty response received."
+    elif isinstance(result.body, dict):
+        text = format_response(result.body)
+    else:
+        text = json.dumps(result.body, indent=2, ensure_ascii=False)
+    if result.status_code is not None and result.status_code != 200:
+        exception = result.body.get("exception") if isinstance(result.body, dict) else None
+        if result.status_code == 408 and isinstance(exception, dict) and "message" in exception:
+            return "Error: pyRevit route handler exception (HTTP 408)\n{}".format(text)
+        try:
+            phrase = HTTPStatus(result.status_code).phrase
+        except ValueError:
+            phrase = ""
+        prefix = "" if result.http_success else "Error: "
+        return "{}HTTP {} {}\n{}".format(prefix, result.status_code, phrase, text).strip()
+    return text
+
+
 def format_response(response):
     """Helper function to format API responses consistently for MCP tools.
 
     Args:
-        response: The response from a revit_get or revit_post call, can be dict or string
+        response: A transport result, compatible view, plain dict, or string
 
     Returns:
         str: Formatted string response suitable for MCP tool return values
     """
+    if isinstance(response, RevitTransportResult):
+        return _format_transport(response)
+    if isinstance(response, (RevitResponse, RevitResponseText)):
+        return _format_transport(response.transport_result)
     if isinstance(response, dict):
+        exception = response.get("exception")
+        native_exception = isinstance(exception, dict) and "message" in exception
         # Check for different success patterns
-        status = response.get("status", "").lower()
-        health = response.get("health", "").lower()
+        status = str(response.get("status") or "").lower()
+        health = str(response.get("health") or "").lower()
 
         # Success conditions: status="success" OR status="active" with health="healthy"
-        is_success = (status == "success" or
+        is_success = (status in {"success", "succeeded"} or
                      (status == "active" and health == "healthy") or
                      (status == "active" and "revit_available" in response and response["revit_available"]))
 
-        if is_success:
+        if is_success and not native_exception:
             # For successful responses, return the most relevant data
             if "output" in response:  # Code execution responses
-                return response["output"]
+                return _format_success_value(response["output"], response)
             elif "message" in response:
-                return response["message"]
+                return _format_success_value(response["message"], response)
             elif "result" in response:
-                return str(response["result"])
+                return _format_success_value(response["result"], response)
             elif "data" in response:
-                return str(response["data"])
+                return _format_success_value(response["data"], response)
             elif status == "active":  # Status check responses
                 # Format status response nicely
                 status_parts = ["=== REVIT STATUS ==="]
@@ -122,13 +199,19 @@ def format_response(response):
                 return "\n".join(status_parts)
             else:
                 return json.dumps(response, indent=2)
-        elif status in RECOVERABLE_STATUSES:
+        elif status in RECOVERABLE_STATUSES and not native_exception:
             # Documented, expected, non-error outcome -- render it neutrally
             # instead of dressing it up as a crash. See RECOVERABLE_STATUSES.
             return _format_recoverable(response)
+        elif (not status and not response.get("error") and not response.get("traceback")
+              and "exception" not in response):
+            # Metadata and operation receipts need not use the legacy status
+            # field. Preserve them as JSON rather than invent an error.
+            return json.dumps(response, indent=2, default=str, ensure_ascii=False)
         else:
             # Error case - provide verbose debugging information
-            error_msg = (response.get("error") or
+            error_msg = ((exception.get("message") if native_exception else None) or
+                         response.get("error") or
                          response.get("message") or
                          "Unknown error occurred")
             traceback_info = response.get("traceback", "")
@@ -138,6 +221,8 @@ def format_response(response):
             # Build comprehensive error message
             error_parts = ["=== ERROR DETAILS ==="]
             error_parts.append("Status: {}".format(status))
+            if native_exception and "source" in exception:
+                error_parts.append("Source: {}".format(exception["source"]))
             error_parts.append("Error: {}".format(error_msg))
 
             if details:

@@ -1,5 +1,6 @@
 """PR #5 review regressions. Controlled host doubles, no native Revit calls."""
 import inspect
+import importlib.util
 import json
 import os
 import sys
@@ -7,6 +8,7 @@ import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -289,6 +291,49 @@ def test_strict_initialization_still_raises_without_legacy_metadata(native_host)
     with pytest.raises(RuntimeError, match="does not belong"):
         runtime.initialize_identity(api)
     assert not api.handlers
+
+
+@pytest.mark.parametrize("failure", [None, "early", "partial"])
+def test_actual_legacy_startup_keeps_raw_health_and_routes_independent(native_host, monkeypatch, failure):
+    api = CapturedAPI()
+    sys.modules["pyrevit"].routes.API = lambda name: api
+    if failure == "early":
+        native_host.registration.process_id = 999
+    elif failure == "partial":
+        register = runtime.register_metadata_routes
+        def broken_register(api, registry):
+            register(api, registry)
+            raise RuntimeError("partial metadata registration")
+        monkeypatch.setattr(runtime, "register_metadata_routes", broken_register)
+    source_dir = Path(__file__).resolve().parents[2]
+    # Load the real status registrar; other independent route modules are inert
+    # registration doubles, never native model handlers.
+    spec = importlib.util.spec_from_file_location("revit_mcp.status", source_dir / "revit_mcp/status.py")
+    status = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(status)
+    monkeypatch.setitem(sys.modules, "revit_mcp.status", status)
+    calls = []
+    for name, registrar in {
+        "model_info": "register_model_info_routes", "views": "register_views_routes",
+        "placement": "register_placement_routes", "colors": "register_color_routes",
+        "code_execution": "register_code_execution_routes", "document": "register_document_routes",
+    }.items():
+        monkeypatch.setitem(sys.modules, "revit_mcp." + name, SimpleNamespace(**{
+            registrar: lambda api, name=name: calls.append(name)}))
+    spec = importlib.util.spec_from_file_location("_identity_review_startup", source_dir / "startup.py")
+    startup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(startup)
+    assert len(calls) == 6
+    assert not inspect.signature(api.handlers["/health/"]).parameters
+    assert api.handlers["/health/"]() == {
+        "status": 200, "data": {"status": "alive", "api_name": "revit_mcp"}}
+    assert api.handlers["/status/"](Document())["status"] == 200
+    metadata_response = api.handlers["/metadata/"]()
+    assert metadata_response["status"] == (503 if failure else 200)
+    if failure:
+        assert not {"instance_id", "runtime_id", "documents"}.intersection(metadata_response["data"])
+    else:
+        assert validate_snapshot(metadata_response["data"])["endpoint"] == "http://127.0.0.1:48884/revit_mcp"
 
 
 async def test_retirement_during_metadata_tool_read_is_a_typed_error(mock_mcp):
