@@ -130,6 +130,76 @@ Repeat the read-only installation checks while these versions are running:
   --output 'C:/Users/NateZwainlesk/AppData/Local/RevitMCP/integration-installs/20261006T173513Z/native-verification.json'
 ```
 
-PR #1's later local-only review correction `2eb54f6` is not included or pushed.
-The modern integration launch retains its existing cached metadata handshake;
-it does not poll the document-context `/status/` route for readiness.
+At the October 6 deployment, PR #1's later correction was not included.
+The modern integration launch retains its cached metadata handshake; it does
+not poll the document-context `/status/` route for readiness.
+
+## October 7 correction update
+
+The user explicitly authorized integration testing to proceed while unfinished
+Opus reviews remain blocked by account usage limits. This is an integration
+test build, not reviewer approval or native acceptance. Original formal reviews
+for PRs #6, #7 and #8 remain incomplete; post-correction confirmations for the
+other PRs remain pending. The PR branches and native stacks are not merged or
+rewritten by this integration update.
+
+The corrected integration incorporates these completed, immutable inputs:
+
+| Workstream | Correction input |
+| --- | --- |
+| Transport #2 | Published `d287d4338e1a467c6577d1496e4fd25fa5d6e752` |
+| Status #1 | Published `2f1ba45fe6a91205f18120c414e6efb6a289f021` |
+| Execution #3 | Published `deba1b68d96b4c09d79b2004386bb0f97f4888a4` |
+| Identity #5 | Published `511b6dc8b46aa8692d283706e03b7b471f1991b2` |
+| Routing #7 | Completed local `988457d0cc587b6d812f28767c0f401d89b13386`, which merges the four canonical inputs above |
+| Dialog/diagnostics #4 | Published `befc39797c65affbc671ea4d411f34dd9d11ab75` |
+| Listener #6 | Completed local `f1cf25babd0e2ae915499edea0e479ec09f75cc4` |
+| Operations #8 | Only owned tests/docs and stop/expiry fix from completed local `1be1fb909bbd776c14225eef6f878b3b6fbb0b25` |
+
+Operations corrections are replayed individually (`5f0ee24`, `6267dd0`,
+`eedc30f`, `6c4b3a8`, `06bec5e`, `34c9d0e`, `1be1fb9`) to avoid importing the
+isolated branch's duplicate execution dependency replays. The integration uses
+the actual canonical execution history through the routing composition.
+
+The family-document fix accepts a successfully closed non-selected helper
+document after its owned scopes have settled. Selected-document loss and
+unresolved transactions remain unsafe. Facade bindings use the requested
+document and explicitly permitted UI context. Capture sink failures no longer
+abort the script. Identity/discovery, native exception diagnostics, retained
+dialog policy swaps, listener diagnostics, and running-operation final receipt
+preservation are also corrected. Targeted startup retains strict identity
+initialization and the shared process safety guard; it never falls back to the
+legacy identity wrapper or an unprotected health route.
+
+The combined corrected connector passed **634 tests**, with 15 fixture-dependent
+native tests skipped. Four installation-update/rollback cases were then added;
+the final combined suite passes **638 tests**, with the same 15 native skips.
+Dependency consistency and whitespace checks pass. No model fixture is opened
+or modified by these checks.
+
+The dispatcher already loads this integration checkout. Update its recorded
+commit and receipt directory using the checked update path, which preserves
+the original legacy startup/local guards, client config, and persisted target
+directory. It refuses to overwrite an edited dispatcher or use a dirty source
+checkout:
+
+```powershell
+.venv/Scripts/python.exe -m scripts.install_revit_integration `
+  --update 'C:/Users/NateZwainlesk/AppData/Local/RevitMCP/integration-installs/20261006T173513Z'
+```
+
+This creates a new timestamped manifest and backs up the previous dispatcher.
+**Open Revit processes still hold their old code and safety state.** Save work
+and fully restart each affected Revit instance to load this build; a connector
+reload does not clear the retained safety guard. A new MCP client process loads
+the updated Python source without a configuration change. No automatic host
+restart, safety reset, async lane activation, dialog response, or listener probe
+activation is performed.
+
+For rollback, restore the update's dispatcher with `--restore <new case>` and
+restore the source checkout to the recorded `previous_integration_sha` before
+restarting. Restoring only the dispatcher does not revert the source code it
+loads. Existing native verification receipts describe the October 6 processes;
+they must not be used as proof that those processes have loaded the October 7
+corrections. Run the read-only verification helper against the new case after
+restarts to obtain new startup receipts and cached identity evidence.

@@ -5,6 +5,7 @@ backed-up startup; selected years retain its pre-registration guards and then
 load this checkout. No models, pyRevit binaries or add-in manifests are changed.
 """
 import argparse
+import ast
 import datetime
 import hashlib
 import json
@@ -35,7 +36,63 @@ def restore(case):
         if digest(data) != item["original_sha256"]:
             raise RuntimeError("Backup checksum mismatch")
         replace_file(Path(item["path"]), data)
-    print("Restored original startup and client configuration; restart Revit/client to load them.")
+    print("Restored backed-up installation files; restart Revit/client to load them.")
+    if manifest.get("previous_integration_sha"):
+        print("Source checkout was not reverted. Restore source commit " +
+              manifest["previous_integration_sha"] + " before restarting for a complete rollback.")
+
+
+def update_installation(case):
+    """Refresh an installed dispatcher's commit receipt without resetting a host.
+
+    Keep its original legacy startup/guards and client configuration. Rollback
+    restores this update's exact previous dispatcher, not the original install.
+    """
+    previous = json.loads((case / "installation.json").read_text(encoding="utf-8"))
+    source = Path(previous["source"]).resolve()
+    startup_items = [item for item in previous["changed_files"]
+                     if Path(item["path"]).name == "startup.py"]
+    if len(startup_items) != 1:
+        raise RuntimeError("Expected one installed startup dispatcher")
+    startup = Path(startup_items[0]["path"])
+    original = startup.read_bytes()
+    if digest(original) != startup_items[0]["installed_sha256"]:
+        raise RuntimeError("Dispatcher changed since installation; refusing to overwrite")
+    if subprocess.check_output(["git", "status", "--porcelain"], cwd=source).strip():
+        raise RuntimeError("Commit the integration checkout before updating")
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    text = original.decode("utf-8")
+    pattern = r"(?m)^_integration_settings = json\.loads\((.*)\)$"
+    match = re.search(pattern, text)
+    if not match:
+        raise RuntimeError("Installed dispatcher settings were not found")
+    settings = json.loads(ast.literal_eval(match.group(1)))
+    if (Path(settings["source"]).resolve() != source
+            or settings["sha"] != previous["integration_sha"]
+            or settings["versions"] != previous["versions"]
+            or Path(settings["case"]).resolve() != case.resolve()):
+        raise RuntimeError("Dispatcher settings disagree with the installation manifest")
+    for key in ("legacy", "guards"):
+        if not Path(settings[key]).is_file():
+            raise RuntimeError("Missing preserved startup dependency: " + key)
+    updated_case = case.parent / datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    updated_case.mkdir(parents=True, exist_ok=False)
+    settings.update(sha=sha, case=str(updated_case))
+    replacement = "_integration_settings = json.loads(%r)" % json.dumps(settings)
+    updated = (text[:match.start()] + replacement + text[match.end():]).encode("utf-8")
+    (updated_case / "previous-dispatcher.py").write_bytes(original)
+    (updated_case / "previous-installation.json").write_text(json.dumps(previous, indent=2), encoding="utf-8")
+    manifest = {"source": str(source), "integration_sha": sha,
+                "versions": previous["versions"], "backup_directory": str(updated_case),
+                "previous_installation": str(case),
+                "previous_integration_sha": previous["integration_sha"],
+                "changed_files": [{"path": str(startup), "backup": "previous-dispatcher.py",
+                                   "original_sha256": digest(original), "installed_sha256": digest(updated)}]}
+    (updated_case / "installation.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    replace_file(startup, updated)
+    print(json.dumps(manifest, indent=2))
+    print("Updated on disk; existing Revit sessions retain their loaded code and safety state until restarted.")
+    return updated_case
 
 
 def install(args):
@@ -150,9 +207,14 @@ def main():
     parser.add_argument("--versions", nargs="+", default=["2024", "2025", "2026"])
     parser.add_argument("--codex-config", type=Path)
     parser.add_argument("--restore", type=Path)
+    parser.add_argument("--update", type=Path, help="Existing installation directory to update, preserving local setup")
     args = parser.parse_args()
+    if args.restore and args.update:
+        parser.error("--restore and --update are mutually exclusive")
     if args.restore:
         restore(args.restore.resolve())
+    elif args.update:
+        update_installation(args.update.resolve())
     elif not all((args.source, args.legacy_extension, args.backup_root)):
         parser.error("--source, --legacy-extension and --backup-root are required")
     else:
