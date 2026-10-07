@@ -10,11 +10,12 @@ The coordinator reported that the Opus review of transport PR #2 recommends
 approval after M1 and has no High findings. Its M2 finding identifies a legacy
 launch hazard: dictionary compatibility views can cause foreign HTTP 4xx JSON
 to satisfy a waiter that accepts `isinstance(response, dict)`. The transport
-owner is preparing local-only classification using the retained
-`transport_result`, without adding target routing. Report reference supplied by
+owner has completed local-only classification using the retained
+`transport_result`, without adding target routing; exact commits are recorded
+below. Report reference supplied by
 the coordinator: `review-opus-pr-2/docs/reviews/opus-pr-2.md`, local `5280c0f`.
-This note does not claim independent review of that report or completion of
-the transport correction.
+This note does not claim independent review of that report or native acceptance
+of the transport correction.
 
 The status owner separately completed local-only commit
 `2eb54f6bf895e5ee5b8334e76107b764fdfb14da`. It keeps `/status/` in document API
@@ -117,3 +118,25 @@ The identity owner was asked for the completed local contract/hash, including
 degraded-metadata composition and fresh linked-document resolution. Integration
 waits for that completed dependency. No source rewrite, deployment or remote
 publication is included in this note.
+
+## Completed local transport dependencies
+
+The transport owner supplied completed, unpushed corrections:
+
+- M1 `7be3e3ca753143ba41caae2739d394d82708fbd3`: classify and render native
+  exception envelopes.
+- M2 `ef8639440bdb0f10ec81d3848793198a6fa7991d`: use structured HTTP evidence
+  in the legacy `/status/` waiter. The owner reports 18 focused tests.
+
+M2 is legacy-only. It must not replace modern routing's metadata/child lifetime/
+version/snapshot/generation checks. The status owner is reconciling these
+completed transport commits with `2eb54f6` locally in its own checkout on
+`local/status-transport-readiness`. Its `/health/` waiter needs HTTP 200, received
+JSON, `api_name='revit_mcp'` and `status='alive'`; HTTP 503 is not readiness.
+That composition is not yet a completed dependency here. Even its valid health
+receipt establishes listener liveness only.
+
+No automatic cherry-pick is performed. Future integration must distinguish the
+M1 transport correction from overlapping legacy M2/status hunks, retain modern
+launch unchanged and keep raw `/health/` outside `TargetedAPI`. The published
+routing branch and integration base remain unchanged.
