@@ -1,5 +1,6 @@
 """Inverted Opus PR8 cases: real registry/journal/runner, inert host only."""
 import threading
+import os
 from types import SimpleNamespace, ModuleType
 
 import pytest
@@ -79,6 +80,8 @@ def test_old_known_terminal_archives_reclaimed_but_uncertain_records_retained(tm
         old.take_next()
         old.complete(name, "failed", effects, {})
     old.admit(payload("unfinished", runtime_id="old"))
+    for path in tmp_path.glob("*.json"):
+        os.utime(str(path), (0, 0))
     now[0] = 11
     fresh = OperationStore("new", journal=journal, clock=lambda: now[0])
     fresh.admit(payload("first", runtime_id="new"))
@@ -190,7 +193,7 @@ def test_failed_api_observation_invalidates_previous_safe_snapshot():
     assert adapter._host_safety == (False, False)
 
 
-def test_foreign_module_retained_guard_rejects_admission_with_known_no_effects():
+def test_foreign_module_retained_guard_rejects_without_admission_or_effects_claim():
     foreign = ModuleType("retired_engine.execution_safety")
     exec("class MutationBlockedError(Exception): pass\n"
          "class RetainedGuard:\n"
@@ -214,8 +217,75 @@ def test_foreign_module_retained_guard_rejects_admission_with_known_no_effects()
     response = handlers["/operations/submit/"](SimpleNamespace(data=request))
     assert response["status"] == 503
     assert response["data"]["error_code"] == "host_quarantined"
-    assert response["data"]["effects"] == "none"
+    assert response["data"]["admitted"] is False
+    assert "effects" not in response["data"]
     assert response["data"]["actual_target"]["runtime_id"] == request["runtime_id"]
     assert adapter.safety is retained and retained.calls == 1
     assert not engine.store.records and not engine.store.has_queued()
     assert engine.event.raises == 0
+
+
+@pytest.mark.parametrize("retry", ["changed_payload", "document_closed", "stopped", "foreign_runtime"])
+def test_rejected_resubmit_cannot_claim_no_effects_for_committed_id(retry):
+    engine, adapter, registry, uiapp, request, selected, other = setup(
+        lambda *a, **k: ({"status": "success", "effects": "committed"}, 200))
+    engine.submit(request)
+    engine.on_external_event(uiapp)
+    assert engine.store.inspect("one")["effects"] == "committed"
+    retried = dict(request)
+    if retry == "changed_payload":
+        retried["code"] = "different"
+    elif retry == "document_closed":
+        selected.IsValidObject = False
+        uiapp.Application.Documents.remove(selected)
+        uiapp.ActiveUIDocument = SimpleNamespace(Document=other)
+        adapter.refresh_api(uiapp)
+    elif retry == "stopped":
+        engine.stop()
+    else:
+        retried["runtime_id"] = "foreign"
+    response = register_execution_routes(SimpleNamespace(route=lambda *a, **k: lambda fn: fn),
+                                         engine, lambda **kw: kw)("submit", SimpleNamespace(data=retried))
+    assert response["status"] in (409, 503)
+    assert response["data"]["admitted"] is False
+    assert "effects" not in response["data"]
+    assert engine.store.records["one"]["receipt"]["effects"] == "committed"
+
+
+def test_repeated_full_archive_rejections_do_not_reparse_all_old_records(tmp_path, monkeypatch):
+    now = [100]
+    journal = ReceiptJournal(str(tmp_path), max_records=50, archive_retention_seconds=10,
+                             clock=lambda: now[0], archive_scan_interval_seconds=60)
+    store = OperationStore("generation", journal=journal, max_queue=50)
+    for index in range(50):
+        store.admit(payload(str(index)))
+    for path in tmp_path.glob("*.json"):
+        os.utime(str(path), (0, 0))
+    reads = []
+    original = journal._read
+
+    def read(path):
+        reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(journal, "_read", read)
+    # Use write directly to reach archive pressure (the store's queue is full).
+    rejected = dict(runtime_id="new", operation_id="rejected", state="queued", effects="none", admitted_at=100)
+    for _ in range(5):
+        with pytest.raises(JournalCapacityError):
+            journal.write("admission", rejected)
+    assert len(reads) == 50
+    now[0] = 161
+    with pytest.raises(JournalCapacityError):
+        journal.write("admission", rejected)
+    assert len(reads) == 100 and len(list(tmp_path.glob("*.json"))) == 50
+
+
+def test_recent_archive_files_are_skipped_without_parsing_receipts(tmp_path, monkeypatch):
+    journal = ReceiptJournal(str(tmp_path), max_records=1)
+    OperationStore("old", journal=journal).admit(payload(runtime_id="old"))
+    monkeypatch.setattr(journal, "_read", lambda *a: pytest.fail("recent record should not be parsed"))
+    for _ in range(3):
+        with pytest.raises(JournalCapacityError):
+            journal.write("admission", dict(runtime_id="new", operation_id="rejected", state="queued",
+                                           effects="none", admitted_at=0))

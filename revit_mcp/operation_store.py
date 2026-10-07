@@ -275,13 +275,17 @@ class ReceiptJournal(object):
     Terminal diagnostics may echo script code and require private storage.
     """
     def __init__(self, directory, max_records=4096, max_record_bytes=524288,
-                 archive_retention_seconds=604800, clock=None):
-        if max_records <= 0 or max_record_bytes <= 0 or archive_retention_seconds <= 0:
+                 archive_retention_seconds=604800, clock=None,
+                 archive_scan_interval_seconds=60):
+        if (max_records <= 0 or max_record_bytes <= 0 or archive_retention_seconds <= 0
+                or archive_scan_interval_seconds <= 0):
             raise ValueError("Positive journal bounds required")
         self.directory = os.path.abspath(directory)
         self.max_records, self.max_record_bytes = max_records, max_record_bytes
         self.archive_retention_seconds = archive_retention_seconds
         self.clock = clock or time.time
+        self.archive_scan_interval_seconds = archive_scan_interval_seconds
+        self._next_archive_scan_at = None
         self.lock = threading.RLock()
         if not os.path.isdir(self.directory):
             os.makedirs(self.directory)
@@ -342,10 +346,18 @@ class ReceiptJournal(object):
 
     def _reclaim_terminal_archives(self, current_runtime):
         """Bounded scan; retain current, unfinished and unknown-effects records."""
-        cutoff = self.clock() - self.archive_retention_seconds
+        now = self.clock()
+        if self._next_archive_scan_at is not None and now < self._next_archive_scan_at:
+            return
+        self._next_archive_scan_at = now + self.archive_scan_interval_seconds
+        cutoff = now - self.archive_retention_seconds
         removed = False
         for name in self._files():
             path = os.path.join(self.directory, name)
+            # Newer disk writes cannot be eligible. Skip their JSON entirely;
+            # retaining an old receipt rewritten recently is conservative.
+            if os.stat(path).st_mtime >= cutoff:
+                continue
             receipt = self._read(path)["receipt"]
             completed = receipt.get("completed_at")
             if (receipt["runtime_id"] != current_runtime and

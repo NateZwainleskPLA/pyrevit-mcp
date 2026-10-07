@@ -39,7 +39,7 @@ objects with inert host doubles. No native acceptance is implied.
   stale/restored file cannot prove native storage history; recovery never replays
   it. This is documented deliberately. Orderly in-process shutdown now reports
   provably queued work precisely as canceled/none. Reviewer agreement on this
-  optional disposition is requested with focused confirmation.
+  optional disposition was explicitly agreed by the reviewer in `45fe7dec`.
 - **F6 maintainability resolved; schema enhancement deferred.** Both factory
   layers use one exclusion-receipt validator/required-route calculation. A
   future unforgeable composition receipt belongs to the routing owner and is
@@ -49,7 +49,8 @@ objects with inert host doubles. No native acceptance is implied.
 - **C1 resolved.** Cached admission handles failed checks from a prior module's
   retained guard without depending on imported exception-class identity. The
   SAME guard is retained and never reset. A foreign-module guard regression
-  confirms HTTP 503 `host_quarantined`, `effects=none`, and no queue/event entry.
+  confirms HTTP 503 `host_quarantined`, `admitted=false`, and no queue/event
+  entry. Submit errors never overwrite historical operation effects.
 - **C2 explicitly scoped to trusted, honest composition.** The exclusion receipt
   is a plain caller-provided assertion, not an authenticated proof/security
   token. The trusted composition owner must supply the actual guarded startup
@@ -57,6 +58,16 @@ objects with inert host doubles. No native acceptance is implied.
   retained safety identity and one-owner lease enforcement still apply; this
   PR does not claim to resist a caller fabricating the receipt. No additional
   identity/owner schema or default/private activation is introduced.
+- **Follow-up N1 resolved.** A rejected submit says `admitted=false` and omits
+  effects. That describes this request without contradicting a previously
+  committed operation under the same ID. Regressions cover payload conflict,
+  closed document, stopped runtime and foreign runtime after known completion.
+- **Follow-up N2 resolved.** Capacity scans skip recent files by mtime before
+  parsing and are throttled to at most once per configured 60-second interval.
+  Protected old records are parsed once across repeated rejections, not on every
+  request; eligible archives are reconsidered after the interval. Recent files
+  require no JSON parsing. This keeps retention conservative while avoiding
+  repeated large-record reads under the store lock.
 
 Final publication must use the UPDATED canonical Origin routing parent and
 inherit its published identity/transport/execution corrections. Only owned

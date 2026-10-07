@@ -46,8 +46,9 @@ def register_execution_routes(api, runtime, make_response=None):
         except OperationError as error:
             body = {"error": safe_text(error), "error_code": error.code}
             if action == "submit":
-                # Admission failed before a new execution was made visible.
-                body["effects"] = "none"
+                # This request admitted nothing. The ID may identify earlier
+                # committed work; do not replace its retained effects evidence.
+                body["admitted"] = False
             return response(body, error.status)
         except (ValueError, TypeError, KeyError) as error:
             return response({"error": safe_text(error), "error_code": "invalid_request"}, 400)
