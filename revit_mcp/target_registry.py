@@ -27,6 +27,11 @@ def set_registry(registry):
     """Startup-only installation seam for the runtime adapter and route owners."""
     global _registry
     with _registry_lock:
+        if registry is None:
+            previous, _registry = _registry, None
+            if previous is not None:
+                previous.expire()
+            return
         if _registry is not None and _registry is not registry:
             _registry.expire()
         _registry = registry
@@ -87,13 +92,14 @@ class TargetRegistry(object):
             previous = self._documents
             refs, descriptors = [], []
             for doc in documents:
-                if not doc.IsValidObject:
+                if not doc.IsValidObject or doc.IsLinked:
                     continue
                 token = next((token for old, token in previous if same_document(old, doc)), None)
                 token = token or str(uuid.uuid4())
                 refs.append((doc, token))
                 descriptors.append(dict(document_id=token, title=doc.Title or "Untitled",
                                         path=doc.PathName or "",
+                                        is_family_document=bool(doc.IsFamilyDocument),
                                         is_active=bool(active_document is not None and
                                                        same_document(doc, active_document))))
             self._documents = refs
