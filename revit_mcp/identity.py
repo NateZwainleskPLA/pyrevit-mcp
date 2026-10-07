@@ -91,7 +91,12 @@ def validate_snapshot(value):
             raise IdentityError("invalid_metadata", "document title/path must be strings")
         if not isinstance(doc.get("is_active"), bool):
             raise IdentityError("invalid_metadata", "is_active must be boolean")
-        result["documents"].append({k: doc[k] for k in ("document_id", "title", "path", "is_active")})
+        family = doc.get("is_family_document", False)
+        if not isinstance(family, bool):
+            raise IdentityError("invalid_metadata", "is_family_document must be boolean")
+        descriptor = {k: doc[k] for k in ("document_id", "title", "path", "is_active")}
+        descriptor["is_family_document"] = family
+        result["documents"].append(descriptor)
     if sum(d["is_active"] for d in result["documents"]) > 1:
         raise IdentityError("invalid_metadata", "multiple active documents")
     for field in ("revit_build", "engine_version", "connector_version", "snapshot_error"):

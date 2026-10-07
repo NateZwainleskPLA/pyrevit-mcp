@@ -18,9 +18,11 @@ def register_routes():
     try:
         # Initialize identity after the status API-context correction. The metadata
         # route reads cached primitives; native callbacks own document collection.
-        from revit_mcp.target_runtime import initialize_identity
+        from revit_mcp.target_runtime import initialize_legacy_identity
 
-        initialize_identity(api)
+        # This is still legacy composition. Targeted/disabled composition must
+        # use strict initialize_identity after its startup owner guard.
+        initialize_legacy_identity(api)
 
         # Import and register status routes
         from revit_mcp.status import register_status_routes

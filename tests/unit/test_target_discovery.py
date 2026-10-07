@@ -85,15 +85,15 @@ async def test_discovery_is_explicit_and_rejects_stale_registration_and_non_meta
     }
     candidates = [dict(endpoint=endpoint) for endpoint in snapshots]
     candidates[1]["registration"] = {"process_id": 999}
-    candidates.append(dict(endpoint=candidates[1]["endpoint"]))  # must not bypass stale evidence
+    candidates.append(dict(endpoint=candidates[1]["endpoint"]))
     checked = []
     async def handshake(endpoint):
         return snapshots[endpoint]
     discovery = TargetDiscovery(directory, candidates, handshake, lambda data: checked.append(data["process_id"]))
     result = await discovery.discover()
-    assert len(result["targets"]) == 1
+    assert len(result["targets"]) == 2  # live handshake survives a stale record
     assert {item["error_code"] for item in result["errors"]} == {"stale_registration", "invalid_identity"}
-    assert len(directory.targets()) == 1
+    assert len(directory.targets()) == 2
     assert checked == [100, 101]
     assert not hasattr(discovery, "selected_target")
 
@@ -196,7 +196,9 @@ class Event:
         self.handlers.append(handler)
         return self
     def __isub__(self, handler):
-        self.handlers.remove(handler)
+        # C# event -= is harmless if this exact delegate was not attached.
+        if handler in self.handlers:
+            self.handlers.remove(handler)
         return self
 
 
@@ -220,7 +222,8 @@ def test_startup_uses_native_registration_and_removes_owned_callbacks_on_reload(
     pyrevit.UI = SimpleNamespace(Events=SimpleNamespace(IdlingEventArgs=object, ViewActivatedEventArgs=object))
     monkeypatch.setitem(sys.modules, "System", SimpleNamespace(AppDomain=SimpleNamespace(CurrentDomain=domain), String=str, Object=object))
     monkeypatch.setitem(sys.modules, "System.Collections.Generic", SimpleNamespace(Dictionary=Generic))
-    start = SimpleNamespace(ToUniversalTime=lambda: SimpleNamespace(ToString=lambda fmt: "2026-10-05T12:00:00.000000Z"))
+    monkeypatch.setitem(sys.modules, "System.Globalization", SimpleNamespace(CultureInfo=SimpleNamespace(InvariantCulture=object())))
+    start = SimpleNamespace(ToUniversalTime=lambda: SimpleNamespace(ToString=lambda fmt, culture: "2026-10-05T12:00:00.000000Z"))
     process = SimpleNamespace(Id=100, StartTime=start)
     monkeypatch.setitem(sys.modules, "System.Diagnostics", SimpleNamespace(Process=SimpleNamespace(GetCurrentProcess=lambda: process)))
     monkeypatch.setitem(sys.modules, "pyrevit.routes.server", SimpleNamespace(serverinfo=SimpleNamespace(register=lambda:
