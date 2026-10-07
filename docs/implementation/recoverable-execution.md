@@ -215,7 +215,21 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
   empty/default dialog IDs remain observation-only without message-text fallback.
   These interfaces are recorded, not imported or wired here. The owner's 62
   focused tests establish Python behavior; native engine retention remains
-  pending, as do its separate diagnostic corrections.
+  pending. Completed diagnostics correction
+  `befc39797c65affbc671ea4d411f34dd9d11ab75` follows `2c5790ab` and is likewise
+  recorded without consumer integration. Future adoption must apply those two
+  completed corrections in order with their completed dialog prerequisites.
+  `collect_loaded_runtime_metadata(application, runtime_snapshot,
+  loaded_build=None, pyrevit_version=None, modules=None, extra_paths=())`
+  performs no file I/O in API context. It captures primitive module paths and
+  caller-retained actual source paths (for example loaded startup `__file__`)
+  with null digests/disk timestamp; paths must not be inferred from a checkout.
+  `hash_loaded_sources(metadata)` copies that capture for optional background
+  hashing, exposes per-file errors and clears stale hashes on failed rehash.
+  Its separate disk timestamp must not replace API capture time or refresh
+  identity. Hashes describe later disk bytes, not loaded code. No provenance
+  capture/export endpoint or background worker is installed by operations.
+  Native engine/module provenance and lifecycle wiring remain unproven.
   Future integration still requires explicit per-operation opt-in after full
   target/document validation, a serialized owner scope, receipt correlation
   and a policy-sensitive admission hash. This dependency note enables no
