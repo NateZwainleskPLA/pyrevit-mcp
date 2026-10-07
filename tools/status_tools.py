@@ -10,7 +10,11 @@ def register_status_tools(mcp, revit_get):
 
     @mcp.tool()
     async def get_revit_status(target: str, ctx: Context) -> str:
-        """Check if the Revit MCP API is active and responding"""
+        """Check the addressed instance's active-document status in API context.
+
+        Busy/modal Revit can delay this document-context call. Discovery reads
+        cached /metadata/ separately; neither proves model execution readiness.
+        """
         response = await revit_get("/status/", ctx, timeout=10.0, target=target)
         return format_response(response)
 

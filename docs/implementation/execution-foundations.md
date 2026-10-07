@@ -6,7 +6,8 @@ Execution foundations
 required target/document handles and full receiver identity validation. This
 foundation does not claim the legacy route already meets the targeting contract.
 
-`execute_script(code, namespace, script_name)` in `execution_output.py` restores
+`execute_script(code, namespace, script_name, buffer_factory=None)` in
+`execution_output.py` uses a single bounded journal by default and restores
 stdout and stderr in an outer finally, including SystemExit/KeyboardInterrupt.
 Output remains separate from stderr. Failures preserve `partial_output`,
 `error_type`, `traceback`, and `script_location` (filename/line/column). A supplied
@@ -56,8 +57,16 @@ here. The injected `revit.doc` follows the supplied document, and both `uidoc`
 and `revit.uidoc` are withheld unless UI changes are enabled. Routing must pass
 no UIDocument for inactive database work and validate UI changes against the
 specified active document. A custom `revit_context` may supply a stricter facade.
-Other delegated pyRevit helpers can use implicit host context: scripts must pass
-the document explicitly. Arbitrary host APIs remain available; this is no sandbox.
+`revit.docs` contains only the supplied document. `active_view` reads and writes
+the supplied UIDocument, and `active_ui_view` matches that document's open UI
+views. Both getters return None when UI access is withheld; the active_view
+setter raises with an opt-in hint. All other public facade assignments are
+rejected rather than silently shadowing a host property. `revit.Transaction`
+and `revit.TransactionGroup` default to the supplied document and preserve an
+explicit document and additional positional/keyword arguments. These pyRevit
+helpers remain untracked; use execution helpers for owned cleanup. Other delegated
+pyRevit helpers can use implicit host context: scripts must pass the document
+explicitly. Arbitrary host APIs remain available; this is no sandbox.
 
 `ExecutionContext(DB, doc, transaction_mode='script', cancellation_check=None)`
 in `execution_context.py` provides:
@@ -109,8 +118,14 @@ and again in API context immediately before mutation. Routing must guard every
 place/color/clear/open/close/save/sync/execute path before claiming host quarantine;
 query paths remain inspectable. This foundation registers no global quarantine.
 
-Execution refuses to enter an already modifiable document. Invalid/closed
-document wrappers or an observed modifiable postcondition are unsafe. Transaction
+Execution refuses to enter an already modifiable document. A closed selected
+document, invalid document with unresolved owned scopes, or observed modifiable
+postcondition is unsafe. A known closed non-selected helper document with all
+owned scopes settled adds an informational `document_notes` entry with stage
+`document_closed`, preserving commit/rollback receipts without cleanup errors.
+Parenting and document deduplication compare wrapper identity first and then
+guarded native Equals calls, so equivalent wrappers share a rollback-group tree.
+Transaction
 cleanup failures and unresolved children are unsafe. Capture-only errors do not
 make the model unsafe. Inspect other affected documents in valid API context,
 where known, and preserve document/operation identity in safety diagnostics. Raw
@@ -130,6 +145,10 @@ and exception rollback by readback, rollback-group flex trials, nested cleanup
 failure, native failure-processing Pending, cancellation at checkpoints,
 stdout/stderr restoration, inactive-document binding, and unsafe-result blocking
 across all mutation paths. No native test or extension reload has been performed.
+Also verify `element.Document is doc` versus `element.Document.Equals(doc)` for
+separately obtained wrappers, rollback-group geometry/receipts through those
+wrappers, and a committed secondary family document closed after loading. Native
+Equals and IsValidObject/Close behavior remain unverified by the doubles.
 
 Bounded stream capture
 ----------------------
@@ -146,8 +165,16 @@ changes execution effects. `output_truncated`, `stderr_truncated`, and
 `stderr_dropped_chars`) describe the loss. Partial output uses the same capped
 prefix. Whichever stream writes first consumes the shared budget.
 
-Both the buffer and fallback write journal retain bounded text; empty writes
-and discarded overflow do not append journal entries. Concurrent writes reserve
+The default retained store is a single bounded write journal; empty writes
+and discarded overflow do not append journal entries. An optional buffer_factory
+remains available for diagnostic/failure injection, including the StringIO/io
+fallback. Its first write/flush failure is recorded as output_write/stderr_write
+or output_flush/stderr_flush and never aborts the script. Repeated failures are
+latched per stream/stage so diagnostics remain bounded. Sink read/close errors
+remain separate cleanup diagnostics; all sink errors can make the result an
+OutputCleanupError but preserve completed model effects and primary exceptions.
+CaptureStream supplies writelines, flush, idempotent close and closed state;
+fileno raises IOError because capture has no file descriptor. Concurrent writes reserve
 the shared budget under a lock. This bounds capture memory during execution,
 including scripts that repeatedly print beyond the limit; it does not bound
 objects allocated by arbitrary script code, exception traces, or other receipts.
