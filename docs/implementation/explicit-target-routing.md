@@ -24,16 +24,28 @@ GET query parameters carry full `instance_id`, `runtime_id`, and scoped
 
 Successful responses must confirm the addressed identities in `actual_target`
 or top-level full identity fields. A missing/mismatched confirmation preserves
-the original response in a failed transport result; a POST outcome is uncertain
-and is never replayed. Presentation uses `compatibility_response` and
+the original response in a failed transport result. Delivery is uncertain for a
+potentially mutating POST, never replayed; known read-only POST queries do not
+become uncertain mutations. Presentation uses `compatibility_response` and
 `format_response`. Image results include the image plus actual identity and the
 requested aliases. Local handle rejection has no fabricated HTTP status.
+
+Direct `resolve` converts HTTP, OS and JSON/value handshake failures to chained
+`IdentityError("target_unreachable", ...)`, leaving existing typed identity
+errors unchanged. `call` returns the underlying failure as structured
+`target_revalidation_failed` evidence, retaining any handshake HTTP body/status
+and explicitly stating that execution was not sent. MCP tools and the file CLI
+render this failure without a raw exception/traceback. Execution transport is
+never awaited after failed verification.
 
 The shared policy includes document-scoped POST `/operations/submit/` and
 runtime-scoped `/operations/inspect/` and `/operations/cancel/`. Inspection and
 cancellation require the original runtime and operation ID, not a live document;
 closing the execution document cannot strand a retained receipt. Historical
 document identity belongs to that receipt, rather than new live resolution.
+All operation endpoints require POST with a nonempty body `operation_id` before
+handshake/transport; GET or a missing ID fails with `missing_operation`.
+Every successful operation response must confirm that original ID.
 This workstream does not register those handlers or an asynchronous runner.
 
 Receiver interface
@@ -64,6 +76,9 @@ observed unsafe cleanup/postconditions latch the guard, and later success cannot
 clear it. Queries remain available. This neither scans raw transactions nor
 repairs another command's scopes. Untracked other-document/file effects remain
 outside this guarantee. Operations must inject the very same retained guard.
+The guard's primitive snapshot selects a local `mutation_blocked` rejection,
+avoiding exception-class identity across engine reloads. Rejection before
+admission returns HTTP 409 and `effects=none` without resetting the guard.
 
 `admission_guard(endpoint, payload, resolved_doc)` runs in API context before the
 handler. It cannot provide HTTP-worker exclusion. `DisabledAPI` instead registers
@@ -116,6 +131,11 @@ satisfy readiness. Process exit stops the wait. Verified launch returns its own
 `launched_unverified` with process evidence and no invented handle. A requested
 file is reported separately from cached `file_open_verified` evidence. Native
 dialogs and actual execution availability still need disposable-host checks.
+Local launch verification does not support a child advertised only on a LAN or
+other non-loopback endpoint, including `REVIT_MCP_ADVERTISED_HOST` overrides.
+It waits only to the configured deadline and returns `launched_unverified` with
+the loopback limitation stated in the tool description and result. Matching a
+remote PID/start/version is not sufficient evidence of local child ownership.
 
 Local file execution
 --------------------

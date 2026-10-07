@@ -214,6 +214,10 @@ def register_launch_tools(mcp, revit_get=None, discovery=None):
         process start time, then waits for its own verified runtime registration.
         Returns that runtime's target handle. Cached registration does not prove
         that a native dialog has closed or a requested file finished opening.
+        Verification requires a loopback registration (localhost, 127.0.0.1 or
+        ::1). A local child advertised only through a LAN/non-loopback endpoint
+        remains launched_unverified after the bounded timeout; remote PID
+        coincidence cannot establish ownership of this locally launched child.
 
         For workshared (central model) files, Revit will show its native
         worksharing dialog on open. Use the open_document tool after launch
@@ -350,7 +354,9 @@ def register_launch_tools(mcp, revit_get=None, discovery=None):
             result["message"] = (
                 "Revit {} was launched but did not respond within {} seconds. "
                 "Ensure pyRevit is installed and Routes Server is enabled in "
-                "pyRevit Settings.".format(selected["year"], timeout)
+                "pyRevit Settings. Child verification requires a loopback "
+                "registration; LAN/non-loopback advertised endpoints are unsupported "
+                "for local launch verification.".format(selected["year"], timeout)
             )
 
         if file_path:
