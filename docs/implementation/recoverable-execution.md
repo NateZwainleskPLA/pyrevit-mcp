@@ -57,6 +57,9 @@ operation queued; retrying its original ID/payload can retry the wakeup without
 re-admitting it. Diagnostic history is bounded. `stop()` expires the generation
 and clears queued payloads without replay; `dispose_in_api_context()` refuses
 active/pending callbacks. A pending callback must drain before disposal.
+Expiry does not overwrite the state of an already-running callback: it requests
+cooperative cancellation and still allows its eventual outcome/effects to be
+archived. The expired runtime cannot serve that receipt as a live endpoint.
 
 `build_runtime_in_api_context(registry, uiapp, execute_payload, ...)` is the
 composition seam; it installs no routes or startup changes itself. The adapter
