@@ -109,8 +109,14 @@ and again in API context immediately before mutation. Routing must guard every
 place/color/clear/open/close/save/sync/execute path before claiming host quarantine;
 query paths remain inspectable. This foundation registers no global quarantine.
 
-Execution refuses to enter an already modifiable document. Invalid/closed
-document wrappers or an observed modifiable postcondition are unsafe. Transaction
+Execution refuses to enter an already modifiable document. A closed selected
+document, invalid document with unresolved owned scopes, or observed modifiable
+postcondition is unsafe. A known closed non-selected helper document with all
+owned scopes settled adds an informational `document_notes` entry with stage
+`document_closed`, preserving commit/rollback receipts without cleanup errors.
+Parenting and document deduplication compare wrapper identity first and then
+guarded native Equals calls, so equivalent wrappers share a rollback-group tree.
+Transaction
 cleanup failures and unresolved children are unsafe. Capture-only errors do not
 make the model unsafe. Inspect other affected documents in valid API context,
 where known, and preserve document/operation identity in safety diagnostics. Raw
@@ -130,6 +136,10 @@ and exception rollback by readback, rollback-group flex trials, nested cleanup
 failure, native failure-processing Pending, cancellation at checkpoints,
 stdout/stderr restoration, inactive-document binding, and unsafe-result blocking
 across all mutation paths. No native test or extension reload has been performed.
+Also verify `element.Document is doc` versus `element.Document.Equals(doc)` for
+separately obtained wrappers, rollback-group geometry/receipts through those
+wrappers, and a committed secondary family document closed after loading. Native
+Equals and IsValidObject/Close behavior remain unverified by the doubles.
 
 Bounded stream capture
 ----------------------
