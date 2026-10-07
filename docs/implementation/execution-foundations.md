@@ -56,8 +56,16 @@ here. The injected `revit.doc` follows the supplied document, and both `uidoc`
 and `revit.uidoc` are withheld unless UI changes are enabled. Routing must pass
 no UIDocument for inactive database work and validate UI changes against the
 specified active document. A custom `revit_context` may supply a stricter facade.
-Other delegated pyRevit helpers can use implicit host context: scripts must pass
-the document explicitly. Arbitrary host APIs remain available; this is no sandbox.
+`revit.docs` contains only the supplied document. `active_view` reads and writes
+the supplied UIDocument, and `active_ui_view` matches that document's open UI
+views. Both getters return None when UI access is withheld; the active_view
+setter raises with an opt-in hint. All other public facade assignments are
+rejected rather than silently shadowing a host property. `revit.Transaction`
+and `revit.TransactionGroup` default to the supplied document and preserve an
+explicit document and additional positional/keyword arguments. These pyRevit
+helpers remain untracked; use execution helpers for owned cleanup. Other delegated
+pyRevit helpers can use implicit host context: scripts must pass the document
+explicitly. Arbitrary host APIs remain available; this is no sandbox.
 
 `ExecutionContext(DB, doc, transaction_mode='script', cancellation_check=None)`
 in `execution_context.py` provides:
