@@ -113,11 +113,13 @@ def _build_launch_command(revit_path, file_path=None, language=None):
 
 
 async def _wait_for_revit_ready(revit_get, ctx, timeout, poll_interval=5):
-    """Poll the pyRevit Routes status endpoint until Revit responds.
+    """Poll document-free Routes liveness until the listener responds.
 
-    Requires a received JSON object with HTTP 200, or a connector-marked HTTP
-    503 (launching without a document can leave the legacy status unhealthy).
-    This transport check does not validate a launched process's identity.
+    This establishes listener availability, not document/API execution readiness.
+    Avoid /status/: its document-context dispatch can wait behind a modal dialog
+    and remain pending after a client timeout. A timeout is not proof of liveness.
+    Requires received HTTP 200 JSON identifying the connector as alive. This
+    check does not validate a launched process's identity or document state.
     """
     import time
 
@@ -131,12 +133,12 @@ async def _wait_for_revit_ready(revit_get, ctx, timeout, poll_interval=5):
                 )
             )
         try:
-            response = await revit_get("/status/", ctx=None, timeout=5.0)
+            response = await revit_get("/health/", ctx=None, timeout=5.0)
             result = getattr(response, "transport_result", None)
-            if (result is not None and result.json_received and
+            if (result is not None and result.status_code == 200 and result.json_received and
                     isinstance(result.body, dict) and not result.revit_error and
-                    (result.status_code == 200 or
-                     (result.status_code == 503 and result.body.get("api_name") == "revit_mcp"))):
+                    result.body.get("api_name") == "revit_mcp" and
+                    result.body.get("status") == "alive"):
                 return True, response
         except Exception:
             pass
@@ -193,7 +195,8 @@ def register_launch_tools(mcp, revit_get):
         """Launch Revit on this machine, optionally opening a file.
 
         Finds installed Revit versions automatically. After launching, polls
-        the pyRevit Routes health endpoint until Revit is ready for MCP tools.
+        the document-free pyRevit Routes health endpoint until the listener
+        responds. Document/API work may still wait while Revit is busy or modal.
 
         For workshared (central model) files, Revit will show its native
         worksharing dialog on open. Use the open_document tool after launch

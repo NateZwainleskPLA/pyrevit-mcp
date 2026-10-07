@@ -9,21 +9,33 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def register_liveness_routes(api):
+    """Register liveness on a worker-context API, separately from model routes."""
+    @api.route('/health/', methods=["GET"])
+    def revit_liveness():
+        """Report listener availability without requesting Revit API context.
+
+        This does not establish document availability or execution readiness.
+        """
+        return routes.make_response(data={
+            "status": "alive",
+            "api_name": "revit_mcp"
+        })
+
+
 def register_status_routes(api):
-    """Register all status-related routes with the API"""
+    """Register document-context status; no worker-context routes are added."""
     
     @api.route('/status/', methods=["GET"])
-    def revit_status():
+    def revit_status(doc):
         """
         Health check endpoint that verifies Revit context availability
+        The doc argument requests dispatch in pyRevit Routes' Revit API context.
         
         Returns:
             dict: Health status with Revit document information
         """
         try:
-            from pyrevit import revit
-            
-            doc = revit.doc
             if doc:
                 return routes.make_response(data={
                     "status": "active",
