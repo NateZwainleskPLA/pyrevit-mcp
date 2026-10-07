@@ -75,6 +75,7 @@ def test_no_private_owner_keeps_default_synchronous_startup(startup_host):
     loaded = load_startup()
     assert events[0] == "identity"
     assert list(inspect.signature(api.handlers["/save_document/"]).parameters) == ["uiapp", "request"]
+    assert list(inspect.signature(api.handlers["/execute_application_code/"]).parameters) == ["uiapp", "request"]
     assert loaded["register_routes"]()["legacy_api_excluded"] is False
     domain.SetData.assert_not_called()
 
@@ -156,6 +157,7 @@ def test_explicit_disabled_mode_still_registers_only_http_rejections(startup_hos
     receipt = loaded["register_routes"](legacy_api_enabled=False)
     assert receipt["legacy_api_excluded"]
     assert receipt["private_runtime_reload_guard"] is True
+    assert "/execute_application_code/" in receipt["excluded_routes"]
     for path in receipt["excluded_routes"]:
         assert list(inspect.signature(api.handlers[path]).parameters) == ["request"]
 

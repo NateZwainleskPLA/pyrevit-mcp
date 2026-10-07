@@ -71,13 +71,17 @@ class OwnedScope(object):
 
 
 class ExecutionContext(object):
-    def __init__(self, db, selected_document, transaction_mode="script", cancellation_check=None):
+    def __init__(self, db, selected_document, transaction_mode="script", cancellation_check=None,
+                 document_provider=None):
         if transaction_mode not in ("script", "managed"):
             raise ValueError("transaction_mode must be 'script' or 'managed'")
         self.db = db
         self.document = selected_document
         self.transaction_mode = transaction_mode
         self.cancellation_check = cancellation_check
+        # Optional API-context callback for application execution only. It
+        # enumerates document state, never foreign transaction objects.
+        self.document_provider = document_provider
         self.scopes = []
         self.active = []
         self.documents = []
@@ -216,6 +220,10 @@ class ExecutionContext(object):
         failed = True
         try:
             self.checkpoint()
+            if self.document_provider is not None:
+                self._observe_documents()
+                for document in self.documents:
+                    self._guard_document(document)
             if self.document is not None:
                 self._guard_document(self.document)
             if self.transaction_mode == "managed":
@@ -240,6 +248,12 @@ class ExecutionContext(object):
             return
         for scope in list(reversed(self.active)):
             self._finish(scope, rollback=True)
+        if self.document_provider is not None:
+            try:
+                self._observe_documents()
+            except BaseException as error:
+                self.cleanup_errors.append({"stage": "application_document_snapshot", "error": safe_text(error)})
+                self.unsafe = True
         for document in self.documents:
             try:
                 if not document.IsValidObject:
@@ -259,6 +273,11 @@ class ExecutionContext(object):
         self.closed = True
         if self.active and self not in _retained_contexts:
             _retained_contexts.append(self)
+
+    def _observe_documents(self):
+        for document in self.document_provider():
+            if not any(_same_document(document, old) for old in self.documents):
+                self.documents.append(document)
 
     def summary(self):
         """Primitive receipt fields; caller supplies validated target identities."""

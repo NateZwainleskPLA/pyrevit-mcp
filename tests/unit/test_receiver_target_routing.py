@@ -111,7 +111,7 @@ def test_mutation_admission_guard_runs_before_handler(host):
     handler.assert_not_called()
 
 
-@pytest.mark.parametrize("endpoint", ["/execute_code/", "/place_family/", "/color_splash/", "/clear_colors/", "/open_document/", "/close_document/", "/save_document/", "/sync_with_central/"])
+@pytest.mark.parametrize("endpoint", ["/execute_code/", "/execute_application_code/", "/place_family/", "/color_splash/", "/clear_colors/", "/open_document/", "/close_document/", "/save_document/", "/sync_with_central/"])
 def test_same_unsafe_guard_blocks_every_mutation_route(host, endpoint):
     from revit_mcp.execution_safety import ExecutionSafety
     reg, a, b, app, ids = host
@@ -122,7 +122,10 @@ def test_same_unsafe_guard_blocks_every_mutation_route(host, endpoint):
     @TargetedAPI(API(), lambda: reg, safety=safety).route(endpoint, methods=["POST"])
     def mutate(doc, request):
         handler()
-    response = mutate(app, SimpleNamespace(method="POST", data=dict(ids, allow_ui_change=True)))
+    data = dict(ids, allow_ui_change=True)
+    if endpoint == "/execute_application_code/":
+        data.pop("document_id")
+    response = mutate(app, SimpleNamespace(method="POST", data=data))
     assert response.status == 409
     assert response.data["error_code"] == "mutation_blocked"
     handler.assert_not_called()

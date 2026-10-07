@@ -134,3 +134,12 @@ optional `--transaction-mode managed` and `--allow-ui-change`. It needs the same
 persistent directory used by the MCP server (or `REVIT_TARGET_STATE`); it cannot
 reuse another process's in-memory namespace. The file adapter performs one
 synchronous call and never replays an uncertain mutation.
+
+Application execution uses the separate `/execute_application_code/` route and
+`execute_revit_application_code` / `execute_revit_application_script_file` tools.
+It requires an explicit target, accepts no document selector, starts with
+`doc=None`, and rejects managed transaction mode. The CLI selects it with
+`--application` in place of `--document`. See the
+[application execution contract](application-scoped-execution.md) for bound
+Application/UIApplication access, opening and continuing, registry descriptors,
+document-state checks, shared process safety and native proof requirements.

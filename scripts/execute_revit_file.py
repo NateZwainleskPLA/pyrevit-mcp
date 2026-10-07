@@ -24,6 +24,18 @@ async def execute_script_file(router, file_path, *, target, document,
                              data=payload, allow_ui_change=allow_ui_change, timeout=60.0)
 
 
+async def execute_application_script_file(router, file_path, *, target,
+                                          description="Application script file execution",
+                                          transaction_mode="script", allow_ui_change=False):
+    """Explicit application scope; never infer it from a missing document."""
+    if transaction_mode != "script":
+        raise ValueError("Application execution requires transaction_mode='script'")
+    payload = read_script_file(file_path)
+    payload.update(description=description, transaction_mode=transaction_mode)
+    return await router.call("POST", "/execute_application_code/", target=target,
+                             data=payload, allow_ui_change=allow_ui_change, timeout=60.0)
+
+
 async def _run(args):
     from tools.target_directory import TargetDirectory
     from tools.target_discovery import TargetDiscovery
@@ -32,6 +44,10 @@ async def _run(args):
     try:
         discovery = TargetDiscovery(directory)
         router = TargetRouter(directory, discovery.verified_handshake)
+        if args.application:
+            return await execute_application_script_file(router, args.file, target=args.target,
+                description=args.description, transaction_mode=args.transaction_mode,
+                allow_ui_change=args.allow_ui_change)
         return await execute_script_file(router, args.file, target=args.target, document=args.document,
                                           description=args.description, transaction_mode=args.transaction_mode,
                                           allow_ui_change=args.allow_ui_change)
@@ -45,13 +61,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--file", required=True, help="UTF-8 Python file on this client machine")
     parser.add_argument("--target", required=True)
-    parser.add_argument("--document", required=True)
+    scope = parser.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--document", help="Explicit document handle (document scope)")
+    scope.add_argument("--application", action="store_true", help="Explicit application scope; no initial document")
     parser.add_argument("--state", default=os.environ.get("REVIT_TARGET_STATE"),
                         help="Existing SQLite handle directory shared with the MCP server")
     parser.add_argument("--description", default="Script file execution")
     parser.add_argument("--transaction-mode", choices=("script", "managed"), default="script")
     parser.add_argument("--allow-ui-change", action="store_true")
     args = parser.parse_args(argv)
+    if args.application and args.transaction_mode != "script":
+        parser.error("--application requires --transaction-mode script")
     if not args.state or not Path(args.state).is_file():
         parser.error("--state or REVIT_TARGET_STATE must name the existing shared handle directory")
     try:

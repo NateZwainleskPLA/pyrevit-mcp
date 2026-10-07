@@ -89,6 +89,11 @@ def request_payload(request):
 def validate_api_context(registry, endpoint, payload, uiapp):
     """Resolve the specified document, ignoring any active doc supplied by Routes."""
     actual = registry.validate_target(payload.get("instance_id"), payload.get("runtime_id"))
+    if endpoint == "/execute_application_code/":
+        if any(key in payload for key in ("document_id", "document")):
+            raise RoutingPolicyError("unexpected_document", "Application execution does not accept a document selector")
+        check_ui_policy(endpoint, False, payload.get("allow_ui_change", False))
+        return None, None, actual
     requires_document, _, _ = route_policy(endpoint)
     active_uidoc = uiapp.ActiveUIDocument
     active_doc = active_uidoc.Document if active_uidoc is not None else None
@@ -133,6 +138,7 @@ class TargetedAPI(object):
                 from pyrevit import routes
                 actual, body, payload = {}, {}, {}
                 doc, admitted = None, False
+                initial_document_ids = None
                 status, headers = 200, {}
                 try:
                     registry = self.registry_getter()
@@ -148,9 +154,13 @@ class TargetedAPI(object):
                             # engine's module: its exception class is different.
                             # Any guard rejection is before handler admission.
                             raise RoutingPolicyError("mutation_blocked", str(error))
-                        if doc is not None:
+                        documents = (tuple(uiapp.Application.Documents) if endpoint == "/execute_application_code/"
+                                     else (() if doc is None else (doc,)))
+                        for candidate in documents:
                             try:
-                                modifiable = doc.IsModifiable
+                                modifiable = candidate.IsModifiable
+                                if not candidate.IsValidObject:
+                                    raise RuntimeError("Document is no longer valid")
                             except Exception as error:
                                 self.safety.observe({"unsafe": True, "error_type": "document_state_unavailable"},
                                                     actual.get("document_id"), payload.get("operation_id"))
@@ -159,6 +169,11 @@ class TargetedAPI(object):
                                 raise RoutingPolicyError("modifiable_document", "Document is already modifiable; mutation was not admitted")
                     if self.admission_guard is not None:
                         self.admission_guard(endpoint, payload, doc)
+                    if endpoint == "/execute_application_code/":
+                        active = uiapp.ActiveUIDocument
+                        snapshot = registry.refresh_documents(uiapp.Application.Documents,
+                                                              active.Document if active is not None else None)
+                        initial_document_ids = set(item["document_id"] for item in snapshot["documents"])
                     values = dict(uiapp=uiapp, request=request, doc=doc, uidoc=uidoc, view_name=view_name)
                     admitted = True
                     response = handler(**{name: values[name] for name in arg_names})
@@ -176,13 +191,30 @@ class TargetedAPI(object):
                     if admitted and self.safety is not None and endpoint in MUTATION_ROUTES:
                         try:
                             closed = endpoint == "/close_document/" and body.get("status") == "success"
-                            if doc is not None and not closed and (not doc.IsValidObject or doc.IsModifiable):
-                                raise RuntimeError("Document is invalid or still modifiable after execution")
+                            documents = (tuple(uiapp.Application.Documents) if endpoint == "/execute_application_code/"
+                                         else (() if doc is None or closed else (doc,)))
+                            for candidate in documents:
+                                if not candidate.IsValidObject or candidate.IsModifiable:
+                                    raise RuntimeError("Document is invalid or still modifiable after execution")
                         except Exception as error:
                             body.update(status="error", unsafe=True, effects="unknown")
                             status = 500
                             body.setdefault("cleanup_errors", []).append({"stage": "routing_postcondition", "error": str(error)})
                         self.safety.observe(body, actual.get("document_id"), payload.get("operation_id"))
+                    if admitted and endpoint == "/execute_application_code/":
+                        try:
+                            active = uiapp.ActiveUIDocument
+                            snapshot = registry.refresh_documents(uiapp.Application.Documents,
+                                                                  active.Document if active is not None else None)
+                            body["opened_documents"] = [item for item in snapshot["documents"]
+                                                        if item["document_id"] not in initial_document_ids]
+                        except Exception as error:
+                            registry.record_refresh_error(error)
+                            body.update(status="error", unsafe=True, effects="unknown")
+                            body.setdefault("cleanup_errors", []).append({"stage": "application_identity_snapshot", "error": str(error)})
+                            status = 500
+                            if self.safety is not None:
+                                self.safety.observe(body, None, payload.get("operation_id"))
                 body["actual_target"] = actual
                 return routes.make_response(data=body, status=status, headers=headers)
 

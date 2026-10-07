@@ -125,9 +125,12 @@ def test_actual_execution_unsafe_result_blocks_other_mutations_with_same_guard(c
     @composed.proxy.route("/list_levels/", methods=["GET"])
     def query(doc):
         return {"status": "success", "title": doc.Title}
-    for path in ("/execute_code/", "/save_document/"):
+    for path in ("/execute_code/", "/execute_application_code/", "/save_document/"):
+        payload = dict(composed.ids, code="doc.value = 42")
+        if path == "/execute_application_code/":
+            payload.pop("document_id")
         response = composed.api.handlers[path](composed.uiapp, SimpleNamespace(
-            method="POST", data=dict(composed.ids, code="doc.value = 42")))
+            method="POST", data=payload))
         assert response.status == 409 and response.data["error_code"] == "mutation_blocked"
         assert response.data["effects"] == "none"
     save.assert_not_called()
