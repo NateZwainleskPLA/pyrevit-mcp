@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.listener_lifecycle.collect import collect, evaluate, observe, owner_matches, socket_owner
+from scripts.listener_lifecycle.collect import collect, evaluate, observe, owner_matches, socket_owner, checks_pass
 from scripts.listener_lifecycle.source_audit import audit, selected, main as audit_main
 
 ROOT = Path(__file__).resolve().parents[2] / 'scripts/listener_lifecycle'
@@ -316,7 +316,7 @@ def test_listener_thread_observation_supports_engine_and_server_variants(storage
     if method_style == 'py2':
         target = SimpleNamespace(im_self=active if wrapped else active.server,
                                  __name__='_serve_forever' if wrapped else 'serve_forever')
-    worker = SimpleNamespace(name='listener', ident=17, is_alive=lambda: True)
+    worker = SimpleNamespace(name='listener', ident=17, daemon=True, is_alive=lambda: True)
     setattr(worker, storage, target)
     active.server_thread = worker
     unknown = SimpleNamespace(name='target-unavailable', ident=18)
@@ -324,9 +324,24 @@ def test_listener_thread_observation_supports_engine_and_server_variants(storage
               threading=SimpleNamespace(active_count=lambda: 2, enumerate=lambda: [worker, unknown]))
     exec(selected(HOST.read_text(), 'native_listener_snapshot'), ns)
     result = ns['native_listener_snapshot']()
-    assert result['observable_serve_threads'] == [{'name': 'listener', 'id': 17}]
-    assert result['unobservable_target_threads'] == [{'name': 'target-unavailable', 'id': 18}]
+    assert result['observable_serve_threads'] == [{'name': 'listener', 'id': 17, 'daemon': True,
+                                                'target_name': '_serve_forever' if wrapped else 'serve_forever'}]
+    assert result['unobservable_target_threads'] == [{'name': 'target-unavailable', 'id': 18, 'daemon': None}]
+    assert result['serve_thread_detection'] == 'observed'
     assert 'not proof' in result['serve_thread_observation']
+
+
+def test_listener_thread_observation_unavailable_is_explicit():
+    worker = SimpleNamespace(name='opaque-listener', ident=17, daemon=True, is_alive=lambda: True)
+    active = SimpleNamespace(server_thread=worker, server=SimpleNamespace(socket=SimpleNamespace(
+        getsockname=lambda: ('127.0.0.1', 48884), fileno=lambda: 7)))
+    ns = dict(get_active_server=lambda: active,
+              threading=SimpleNamespace(active_count=lambda: 1, enumerate=lambda: [worker]))
+    exec(selected(HOST.read_text(), 'native_listener_snapshot'), ns)
+    result = ns['native_listener_snapshot']()
+    assert result['serve_thread_detection'] == 'unavailable'
+    assert result['observable_serve_threads'] is None
+    assert result['unobservable_target_threads'][0]['name'] == 'opaque-listener'
 
 
 def receipt_rows():
@@ -343,7 +358,7 @@ def receipt_rows():
 def test_outage_evaluation_does_not_confuse_probe_and_native_health():
     rows = receipt_rows()
     checks = evaluate(rows, 17, START, 'old')
-    assert all(v for k, v in checks.items() if k != 'native_acceptance')
+    assert checks_pass(checks)
     rows[1] = dict(path='/routes/sisters', outcome='transport_error', response_bytes=0)
     checks = evaluate(rows, 17, START, 'old')
     assert checks['diagnostic_ready'] and not checks['native_sisters_responded']
@@ -352,6 +367,36 @@ def test_outage_evaluation_does_not_confuse_probe_and_native_health():
     assert not evaluate(rows, 17, START)['diagnostic_ready']
     rows[0]['body']['process_started_at'] = '2026-10-05T12:00:00'
     assert not evaluate(rows, 17, START)['diagnostic_ready']
+
+
+def test_duplicate_same_pid_socket_count_is_evidence_not_a_health_gate(monkeypatch, tmp_path):
+    import scripts.listener_lifecycle.collect as module
+    owners = [{'process_id': 17, 'process_started_at': START, 'local_address': address, 'local_port': 48884}
+              for address in ['0.0.0.0', '127.0.0.1']]
+    monkeypatch.setattr(module, 'socket_owner', lambda port: owners)
+    rows = iter(receipt_rows()[:3])
+    monkeypatch.setattr(module, 'observe', lambda *args: next(rows))
+    output = tmp_path / 'duplicate-sockets.json'
+    result = collect(48884, 17, START, 'baseline', output)
+    assert result['listen_socket_count'] == result['checks']['listen_socket_count'] == 2
+    assert result['unique_owner_process_count'] == result['checks']['unique_owner_process_count'] == 1
+    assert 'hypothesis' in result['listen_socket_count_interpretation']
+    assert checks_pass(result['checks'])
+    assert len(json.loads(output.read_text())['last_socket_owners']) == 2
+
+
+def test_collector_retains_mixed_inaccessible_coowner_without_sending(monkeypatch, tmp_path):
+    import scripts.listener_lifecycle.collect as module
+    owners = [{'process_id': 17, 'process_started_at': START, 'local_address': '0.0.0.0'},
+              {'process_id': 99, 'process_started_at': None, 'local_address': '127.0.0.1'}]
+    monkeypatch.setattr(module, 'socket_owner', lambda port: owners)
+    monkeypatch.setattr(module, 'observe', lambda *args: pytest.fail('unverified coowner contacted'))
+    output = tmp_path / 'mixed-sockets.json'
+    result = collect(48884, 17, START, 'baseline', output)
+    assert 'socket_owner_mismatch' in result['error']
+    assert result['listen_socket_count'] == result['unique_owner_process_count'] == 2
+    assert json.loads(output.read_text())['last_socket_owners'] == owners
+    assert result['observations'] == []
 
 
 def test_collector_never_sends_request_after_owner_mismatch(monkeypatch, tmp_path):

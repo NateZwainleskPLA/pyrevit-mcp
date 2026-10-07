@@ -33,8 +33,8 @@ def socket_owner(port):
     script = """$ErrorActionPreference = 'Stop'
 $rows = @(Get-NetTCPConnection -State Listen -LocalPort PORT -ErrorAction Stop |
     ForEach-Object {
-        $row = @{process_id=$_.OwningProcess; process_started_at=$null;
-            local_address=$_.LocalAddress; local_port=$_.LocalPort}
+        $row = @{process_id=[int]$_.OwningProcess; process_started_at=$null;
+            local_address=$_.LocalAddress; local_port=[int]$_.LocalPort}
         try {
             $p = Get-Process -Id $_.OwningProcess -ErrorAction Stop
             $started = $p.StartTime
@@ -131,6 +131,10 @@ def evaluate(rows, pid, started_at, previous_generation=None):
                 same_instant(body['process_started_at'], started_at) and
                 not body.get('stopped', True))
     stale = next((r for r in rows if '?generation=' in r['path']), None)
+    counts = [len(row[key]) for row in rows
+              for key in ('socket_owners_before', 'socket_owners_after') if key in row]
+    pid_counts = [len(set(owner['process_id'] for owner in row[key])) for row in rows
+                  for key in ('socket_owners_before', 'socket_owners_after') if key in row]
     return {
         'diagnostic_ready': state_ok,
         'native_sisters_responded': native.get('status') == 200 and isinstance(native.get('body'), list),
@@ -142,7 +146,16 @@ def evaluate(rows, pid, started_at, previous_generation=None):
             stale is not None and stale.get('status') == 409 and
             stale.get('body') == {'error': 'stale_diagnostic_generation'},
         'native_acceptance': 'not established by HTTP observations alone',
+        'listen_socket_count': max(counts) if counts else None,
+        'unique_owner_process_count': max(pid_counts) if pid_counts else None,
     }
+
+
+def checks_pass(checks):
+    required = ('diagnostic_ready', 'native_sisters_responded', 'unknown_route_responded')
+    optional = ('generation_changed', 'stale_diagnostic_rejected')
+    return (all(checks.get(name) is True for name in required) and
+            all(checks.get(name) is True for name in optional if checks.get(name) is not None))
 
 
 def collect(port, pid, started_at, phase, output, previous_generation=None, timeout=3):
@@ -162,6 +175,12 @@ def collect(port, pid, started_at, phase, output, previous_generation=None, time
             save()
             return receipt
         receipt['last_socket_owners'] = owners
+        receipt['listen_socket_count'] = max(receipt.get('listen_socket_count', 0), len(owners))
+        receipt['unique_owner_process_count'] = max(
+            receipt.get('unique_owner_process_count', 0), len(set(owner['process_id'] for owner in owners)))
+        receipt['listen_socket_count_interpretation'] = (
+            'Maximum observed Listen row count, not unique PID count; '
+            'multiple same-PID sockets are a hypothesis, not an established outage cause')
         if not owner_matches(owners, pid, started_at):
             receipt['error'] = 'socket_owner_mismatch; no request sent to the observed owner'
             save()
@@ -171,6 +190,11 @@ def collect(port, pid, started_at, phase, output, previous_generation=None, time
         receipt['observations'].append(row)
         try:
             row['socket_owners_after'] = socket_owner(port)
+            receipt['listen_socket_count'] = max(receipt['listen_socket_count'],
+                                                len(row['socket_owners_after']))
+            receipt['unique_owner_process_count'] = max(
+                receipt['unique_owner_process_count'],
+                len(set(owner['process_id'] for owner in row['socket_owners_after'])))
         except Exception as ex:
             receipt['error'] = 'socket_owner_unavailable_after_response: ' + str(ex)
             save()
@@ -202,8 +226,7 @@ def main():
                       args.previous_generation, args.timeout)
     print(json.dumps(receipt, indent=2))
     checks = receipt.get('checks', {})
-    return 0 if checks and all(v for k, v in checks.items()
-                              if k != 'native_acceptance' and v is not None) else 1
+    return 0 if checks_pass(checks) else 1
 
 
 if __name__ == '__main__':

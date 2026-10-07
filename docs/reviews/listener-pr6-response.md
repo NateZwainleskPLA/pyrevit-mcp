@@ -9,20 +9,28 @@ Review status
 -------------
 
 The existing Opus reviewer thread
-`mcp:ee24b98a-4e42-467a-9310-c13efb5ac89d` stopped at its provider session limit
-before a final report or findings handoff. One owner-requested resume in that
-same thread immediately hit the same limit. No additional reviewer thread,
-provider switch, or claimed reviewer approval substitutes for that missing
-handoff. The responses below address concrete problems reconstructed from the
-saved review activity and its local thread-detection repro. Final review
-completion/confirmation remains outstanding.
+`mcp:ee24b98a-4e42-467a-9310-c13efb5ac89d` completed its original formal report
+at local reviewer commit `f1f7f2d`, reviewing `4e8ec5f..fd4250c`. Verdict:
+**approve with changes**, with findings F1-F6. That original-report gate is
+fulfilled. The report and repro remain in its read-only review checkout;
+this record maps each finding to owned corrections and owner validation.
+Focused reviewer confirmation of corrected candidate `dc262f1` is complete,
+recorded at local reviewer commit `7119caf`: all F1-F6 resolved, no material
+residuals, and no objection to the owned fast-forward publication. The reviewer
+confirmed imports from this checkout, 35 focused/109 unit tests, the inverted
+original repro, actual Windows ownership rows, and both source audits.
+
+The review notes a conservative boundary race: if the watchdog fires as the
+last byte arrives, a complete response can be labeled a timeout. This is accepted
+as non-blocking because diagnostics fail conservatively; it is not native
+acceptance or evidence of an outage cause.
 
 The saved system notice identifies an account-wide Claude five-hour usage cap,
 resetting October 7, 2026 at 15:20 America/Los_Angeles (22:20 UTC). The existing
 reviewer/worktree/evidence remain intact. No further pre-reset retry, new thread,
 provider substitution, scheduler or timer for retrying the review was created.
 
-Ownership query: unreadable rows
+F1: ownership query retains unreadable rows
 -------------------------------
 
 The embedded PowerShell pipeline previously tried to call `ToUniversalTime()`
@@ -46,7 +54,7 @@ and the mixed result fails closed. The separate real Windows local Python
 socket test also remains passing. These fixtures neither inspect nor contact
 Revit.
 
-Thread observation compatibility
+F2: thread observation compatibility
 --------------------------------
 
 The saved reviewer repro returned an empty `observable_serve_threads` list for
@@ -60,15 +68,21 @@ The original reviewer repro now observes both workers when run against this
 checkout. Threads with unavailable targets are recorded separately, and a
 best-effort label makes clear that missing observations do not prove absence,
 teardown, or accepted-worker drain.
+Matched rows now also include daemon status and target name. If no thread has
+an introspectable target, the receipt explicitly reports detection unavailable
+and null observable threads; the reviewer-requested unavailable test covers it.
 
-Source comparison and native limits
+F3: source comparison and native limits
 -----------------------------------
 
 The historical `cfce059` defects are retained as historical evidence. A separate
 source-only audit of installed `C:/Program Files/pyRevit-Master` returns one
-start and shutdown-before-close, with exit 0. The runbook records inspected file
-hashes and directs users to compare the actual chosen baseline before proposing
-a patch that is already present. No installed-source inspection is presented
+start and shutdown-before-close, with exit 0. Its version file reports
+`7.0.0.26254+1828`; its wrapper already has a `_stopping` guard and retry loop.
+The runbook now makes that release (or the chosen supported release) the
+comparison baseline, with a remaining proposal limited to `server_close()`,
+accepted-worker drain policy, and failed-stop visibility. Historical patches
+apply only where their defects remain. No installed-source inspection is presented
 as evidence of what any live Revit process has loaded.
 
 No native fixture was supplied, and no native requests, probe activation,
@@ -76,6 +90,34 @@ installation, reload, model edits or shared configuration changes occurred.
 The listener's accepted-worker drain, event/engine retention and full native
 reload matrix remain pending release gates. No production listener patch or
 dialog/diagnostics foundation is introduced by these corrections.
+
+F4: Listen rows are counted independently of unique processes
+-----------------------------------------------------------
+
+The raw query retains local address/port. Receipt/checks now report maximum
+observed `listen_socket_count` across before/after queries, and separately
+`unique_owner_process_count`. A two-socket/same-PID fixture reports 2 sockets
+and 1 process, retains both addresses, and still passes the required HTTP checks.
+Socket counts are hypothesis evidence, not a proven outage cause or a health gate.
+A mixed-owner fixture preserves both rows and sends no GET when one start time
+is inaccessible.
+
+F5: overall request deadline
+----------------------------
+
+Commit `102e28e` bounds connection setup, headers and body under the same
+deadline, including drip-fed headers/body that renew ordinary per-read timeouts.
+The tests and separate ownership-query limits are described below.
+
+F6: retired-engine cleanup failure is restart-only recovery
+---------------------------------------------------------
+
+The runbook now explicitly directs Capture before Start/Replace after full
+reload, retains previous evidence/logs if Capture fails, and treats
+`Previous diagnostic cleanup failed` as an expected fail-closed matrix result.
+Start/Replace remain blocked until the disposable process restarts; there is no
+automatic owner clearing, activation retry, or restart of an editing session.
+Native cross-engine cleanup remains unproved.
 
 Assessment of unconfirmed review concerns
 ----------------------------------------
@@ -113,21 +155,21 @@ tests assessed them independently:
 
 All locally reproduced diagnostic defects above are corrected and tested.
 Unconfirmed native teardown remains a release gate, not a finding converted to
-a proven defect. The original Opus review is still incomplete; these assessments
-must not be described as exhaustive Opus findings, completion or reapproval.
+a proven defect. These independent assessments are separate from the finalized
+F1-F6 findings and must not be described as reviewer reapproval.
 
 Validation commands
 -------------------
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/unit/test_listener_lifecycle.py -q
-# 32 passed
+# 35 passed
 .\.venv\Scripts\python.exe -m pytest tests/unit -q
-# 106 passed
+# 109 passed
 git diff --check
 # passed
 ```
 
 Final results are reported with the local correction commit to the coordinator;
-they establish the diagnostic behaviors above, not native acceptance or the
-unavailable reviewer's approval.
+they establish the diagnostic behaviors above, not native acceptance. The
+separately completed focused reviewer confirmation is recorded above.
