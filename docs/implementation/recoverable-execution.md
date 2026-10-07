@@ -162,7 +162,7 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
 - Completed identity, routing, transport and execution-foundation commits are
   integrated; tests exercise their real modules with inert Revit doubles.
 - Adoption of execution-foundation review fixes is pending the owner's completed
-  local contract and commit. Opus PR #3 report `f0bbb53`
+  local contract and commit for each remaining correction. Opus PR #3 report `f0bbb53`
   (`docs/reviews/opus-pr-3.md` in `review-opus-pr-3`) reports F1 closed helper
   documents falsely marking settled owned work unsafe/unknown, F2 Python wrapper
   identity misparenting scopes across group rollback, F3 UI facade gating and
@@ -175,8 +175,18 @@ API behavior and IronPython/CLR engine lifetime are not proven by syntax checks.
   exact supplied-document/UI binding in the adapter (F3), and the same retained
   process safety instance across every mutation path. Do not reset safety to
   accommodate these fixes. The report's 147 unit and four reproduction tests
-  use doubles/source and provide no native workflow proof. No unfinished fix
-  branch is imported or runtime behavior changed by this dependency note.
+  use doubles/source and provide no native workflow proof. Completed correction
+  `8591295fdea4400081e304d07c1d3990f2c46201` is integrated locally on
+  `fix/recoverable-operations-review` as `2e4e8f8`, addressing F1/F2 without
+  changing service signatures. `document_notes: [{stage: 'document_closed'}]`
+  is informational for a closed non-selected helper with no active owned scope.
+  Operations regressions exercise settled helper commit/rollback followed by
+  load/close and another admission, equivalent-wrapper group rollback, selected
+  document loss and a closed helper with a pending scope. The same safety
+  instance is retained; no adapter changes or safety reset were necessary.
+  F3-F5 remain pending their own completed corrections. No unfinished fix branch
+  is imported, no remote ref changed, and native Equals/Close/Pending behavior
+  remains unproven by these inert tests.
 - Startup/private-lease composition and the exclusion receipt are integrated;
   native cross-engine retained-object behavior and accepted-worker draining
   remain unproven. There is no automatic/default private-mode registration.
