@@ -57,6 +57,10 @@ def register_routes(legacy_api_enabled=True):
 
             register_document_routes(targeted_api)
 
+            from revit_mcp.family_backport import register_family_backport_routes
+
+            register_family_backport_routes(targeted_api)
+
             logger.info("All MCP routes registered successfully")
             if not legacy_api_enabled:
                 from revit_mcp.routing_policy import ROUTES

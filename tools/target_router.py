@@ -3,7 +3,7 @@ import anyio
 import httpx
 from dataclasses import replace
 
-from revit_mcp.routing_policy import MUTATION_ROUTES, ROUTES, RoutingPolicyError, route_policy
+from revit_mcp.routing_policy import APPLICATION_ROUTES, MUTATION_ROUTES, ROUTES, RoutingPolicyError, route_policy
 from revit_mcp.identity import IdentityError
 from .revit_transport import RevitTransportResult, request_revit
 
@@ -60,7 +60,7 @@ class TargetRouter:
             raise RoutingPolicyError("missing_target", "An explicit target handle is required")
         if requires_document and not document:
             raise RoutingPolicyError("missing_document", "An explicit document handle is required")
-        if endpoint == "/execute_application_code/" and document is not None:
+        if endpoint in APPLICATION_ROUTES and document is not None:
             raise RoutingPolicyError("unexpected_document", "Application execution does not accept a document handle")
         if type(allow_ui_change) is not bool:
             raise RoutingPolicyError("invalid_ui_permission", "allow_ui_change must be a boolean")

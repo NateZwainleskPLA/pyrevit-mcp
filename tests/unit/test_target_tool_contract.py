@@ -8,9 +8,9 @@ from tools import register_tools
 
 def test_all_directed_public_tools_require_target_and_document_where_scoped(mock_mcp):
     register_tools(mock_mcp, AsyncMock(), AsyncMock(), AsyncMock())
-    exceptions = {"launch_revit", "list_revit_installations"}
+    exceptions = {"launch_revit", "list_revit_installations", "assess_family_backport", "compare_family_backport"}
     process_only = {"get_revit_status", "open_document", "execute_revit_application_code",
-                    "execute_revit_application_script_file"}
+                    "execute_revit_application_script_file", "inspect_family_backport"}
     for name, tool in mock_mcp.tools.items():
         signature = inspect.signature(tool)
         if name in exceptions:

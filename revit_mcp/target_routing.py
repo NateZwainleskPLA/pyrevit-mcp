@@ -4,7 +4,7 @@ import json
 from contextlib import contextmanager
 
 from .identity import IdentityError, string_types
-from .routing_policy import MUTATION_ROUTES, RoutingPolicyError, check_ui_policy, route_policy
+from .routing_policy import APPLICATION_ROUTES, MUTATION_ROUTES, RoutingPolicyError, check_ui_policy, route_policy
 from .target_registry import get_registry, same_document
 from .execution_safety import ExecutionSafety, MutationBlockedError
 
@@ -89,7 +89,7 @@ def request_payload(request):
 def validate_api_context(registry, endpoint, payload, uiapp):
     """Resolve the specified document, ignoring any active doc supplied by Routes."""
     actual = registry.validate_target(payload.get("instance_id"), payload.get("runtime_id"))
-    if endpoint == "/execute_application_code/":
+    if endpoint in APPLICATION_ROUTES:
         if any(key in payload for key in ("document_id", "document")):
             raise RoutingPolicyError("unexpected_document", "Application execution does not accept a document selector")
         check_ui_policy(endpoint, False, payload.get("allow_ui_change", False))
@@ -156,7 +156,7 @@ class TargetedAPI(object):
                             # engine's module: its exception class is different.
                             # Any guard rejection is before handler admission.
                             raise RoutingPolicyError("mutation_blocked", str(error))
-                        documents = (tuple(uiapp.Application.Documents) if endpoint == "/execute_application_code/"
+                        documents = (tuple(uiapp.Application.Documents) if endpoint in APPLICATION_ROUTES
                                      else (() if doc is None else (doc,)))
                         for candidate in documents:
                             try:
@@ -171,7 +171,7 @@ class TargetedAPI(object):
                                 raise RoutingPolicyError("modifiable_document", "Document is already modifiable; mutation was not admitted")
                     if self.admission_guard is not None:
                         self.admission_guard(endpoint, payload, doc)
-                    if endpoint == "/execute_application_code/":
+                    if endpoint in APPLICATION_ROUTES:
                         active = uiapp.ActiveUIDocument
                         snapshot = registry.refresh_documents(uiapp.Application.Documents,
                                                               active.Document if active is not None else None)
@@ -193,7 +193,7 @@ class TargetedAPI(object):
                     if admitted and self.safety is not None and endpoint in MUTATION_ROUTES:
                         try:
                             closed = endpoint == "/close_document/" and body.get("status") == "success"
-                            documents = (tuple(uiapp.Application.Documents) if endpoint == "/execute_application_code/"
+                            documents = (tuple(uiapp.Application.Documents) if endpoint in APPLICATION_ROUTES
                                          else (() if doc is None or closed else (doc,)))
                             for candidate in documents:
                                 if not candidate.IsValidObject or candidate.IsModifiable:
@@ -203,7 +203,7 @@ class TargetedAPI(object):
                             status = 500
                             body.setdefault("cleanup_errors", []).append({"stage": "routing_postcondition", "error": str(error)})
                         self.safety.observe(body, actual.get("document_id"), payload.get("operation_id"))
-                    if admitted and endpoint == "/execute_application_code/":
+                    if admitted and endpoint in APPLICATION_ROUTES:
                         try:
                             active = uiapp.ActiveUIDocument
                             snapshot = registry.refresh_documents(uiapp.Application.Documents,

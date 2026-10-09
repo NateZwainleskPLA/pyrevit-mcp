@@ -14,6 +14,7 @@ def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func
     from .code_execution_tools import register_code_execution_tools
     from .launch_tools import register_launch_tools
     from .document_tools import register_document_tools
+    from .family_backport_tools import register_family_backport_tools
 
     # Register tools from each module
     register_status_tools(mcp_server, revit_get_func)
@@ -26,6 +27,7 @@ def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func
     )
     register_launch_tools(mcp_server, revit_get_func, discovery=target_discovery)
     register_document_tools(mcp_server, revit_get_func, revit_post_func)
+    register_family_backport_tools(mcp_server, revit_post_func)
     if target_directory is not None and target_discovery is not None:
         from .target_tools import register_target_tools
         register_target_tools(mcp_server, target_directory, target_discovery)

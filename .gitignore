@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Local experiments and disposable Revit test artifacts
+/.scratch/
+
 *TODO.md
 .env
 CLAUDE.md

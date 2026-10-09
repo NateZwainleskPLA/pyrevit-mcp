@@ -73,6 +73,45 @@ They never conflict because they serve different roles, speak different protocol
 
 ## **Supported Tools**
 
+### Family Back Port (initial agent workflow)
+
+The repository includes an agent skill at
+[`.agents/skills/revit-family-backport/SKILL.md`](.agents/skills/revit-family-backport/SKILL.md)
+and three evidence tools:
+`inspect_family_backport`, `assess_family_backport`, and `compare_family_backport`.
+The workflow reconstructs supported native content in a target-version family
+template; it does not change an RFA's version header or invoke a backward Save As.
+The first reconstruction helper targets Revit 2024 from 2025 and is limited to
+simple Generic Model extrusions, scalar parameters, formulas, named types and
+extrusion parameter associations. Unsupported relationships are explicit blockers.
+Complex assemblies, arrays, materials, shared parameters and 2022 remain staged
+work. See [API research and compatibility findings](docs/research/family-backport.md).
+The simple and extended extrusion fixtures have passed live 2025-to-2024
+save/reopen comparisons, formula flex and instance visibility tests. Supply a
+matching source-version `template_path` during inspection to distinguish default
+template constraints from authored relationships; changed or additional content
+remains a blocker.
+
+Reload the pyRevit extension and restart the MCP server to register the new
+inspection route/tools. Source inspection checks `expected_version` against the
+actual running Revit API. Discover sessions with `list_revit_targets` and pass
+the source runtime's explicit `target` handle to inspection. Reconstruction is
+agent-invoked application API work in the target runtime, using script transaction
+mode for background document operations; the
+skill explains how to load a checkout for development without reinstalling it.
+Live validation status is recorded in
+[the validation note](docs/research/family-backport-validation.md).
+The [nested assembly case study](docs/research/family-backport-case-study.md)
+captures lessons from a separate complex assembly rebuild and the next
+constraint/nesting adapters.
+
+Use the skill from the checkout or copy the entire `revit-family-backport` folder
+into your agent's skills directory. Its references and loader travel with the
+folder. Install/configure pyrevit-mcp separately; copying a skill does not install
+the MCP tools or Revit extension. Supply paths and matching source/target RFTs
+from your own Revit installation. The workflow has no dependency on private
+families, prior conversations or development-run artifacts.
+
 
 ### **Current Implementation Status**
 

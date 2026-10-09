@@ -10,6 +10,7 @@ ROUTES = {
     "/model_info/": (True, False, False),
     "/execute_code/": (True, False, False),
     "/execute_application_code/": (False, False, False),
+    "/family_backport/inspect/": (False, False, False),
     "/list_views/": (True, False, False),
     "/get_view/": (True, False, False),
     "/current_view_info/": (True, True, False),
@@ -32,7 +33,11 @@ ROUTES = {
 MUTATION_ROUTES = frozenset((
     "/execute_code/", "/execute_application_code/", "/place_family/", "/color_splash/", "/clear_colors/",
     "/open_document/", "/close_document/", "/save_document/", "/sync_with_central/",
+    "/family_backport/inspect/",
 ))
+
+# These routes can create temporary documents without an existing document selector.
+APPLICATION_ROUTES = frozenset(("/execute_application_code/", "/family_backport/inspect/"))
 
 
 class RoutingPolicyError(ValueError):
