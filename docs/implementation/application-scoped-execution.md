@@ -111,6 +111,17 @@ Adding the route to the shared policy also adds it to the private lane's require
 legacy-exclusion receipt. Reload never clears safety and no recovery/reset path
 is added.
 
+If a script reloads pyRevit, its addressed registry can expire before the final
+identity refresh. Otherwise successful execution returns HTTP 409 with
+`error_code='runtime_expired'` and `rediscovery_required=true`, with the original `actual_target`, output and
+transaction effects preserved. The client must rediscover before further calls;
+it must not replay the script, whose work may already have committed.
+Expiration diagnostics appear in `identity_errors`, and no incomplete
+`opened_documents` list is returned. Expiration alone does not latch safety.
+Native postcondition failures and unresolved owned transactions still latch the
+same guard, including across reloads; other identity refresh failures retain
+their fail-closed behavior. Existing script errors and HTTP failures are preserved.
+
 Before admission, the receiver checks open document validity and
 `IsModifiable`. An existing foreign open transaction causes rejection without
 running the script or cleaning that transaction. The execution context takes an
