@@ -337,6 +337,117 @@ def test_application_document_enumeration_failure_after_raw_work_is_unsafe(appli
         "application_document_snapshot", "application_identity_snapshot"}
 
 
+def test_pyrevit_reload_requires_rediscovery_without_blocking_replacement_runtime(application_host, monkeypatch):
+    host = application_host
+    original_ids = dict(host.ids)
+
+    def reload_pyrevit():
+        host.reg.expire()
+        host.reg = registry(instance_id=original_ids["instance_id"])
+        snapshot = host.reg.refresh_documents(host.uiapp.Application.Documents)
+        host.ids = {key: snapshot[key] for key in ("instance_id", "runtime_id")}
+        host.execution.register_code_execution_routes(
+            TargetedAPI(host.api, lambda: host.reg, safety=host.safety))
+
+    monkeypatch.setitem(sys.modules, "pyrevit.loader", SimpleNamespace(
+        sessionmgr=SimpleNamespace(reload_pyrevit=reload_pyrevit)))
+    response = execute(host, """
+helper = app.OpenDocumentFile('helper.rfa')
+with execution.transaction(helper, 'Edit before reload'):
+    helper.value = 42
+from pyrevit.loader import sessionmgr
+sessionmgr.reload_pyrevit()
+print('pyRevit reload completed')
+""")
+    assert response.status == 409
+    assert response.data["error_code"] == "runtime_expired"
+    assert response.data["rediscovery_required"] is True
+    assert response.data["actual_target"] == original_ids
+    assert response.data["effects"] == "committed"
+    assert response.data["output"] == "pyRevit reload completed\n"
+    assert response.data["unsafe"] is False
+    assert response.data["cleanup_errors"] == []
+    assert response.data["identity_errors"] == [{
+        "stage": "application_identity_snapshot", "error": "connector runtime has expired"}]
+    assert "opened_documents" not in response.data
+    assert not host.safety.snapshot()["blocked"]
+    assert host.ids["runtime_id"] != original_ids["runtime_id"]
+    # Old addresses are stale, but newly discovered addresses can execute.
+    stale = host.api.handlers["/execute_application_code/"](host.uiapp, SimpleNamespace(
+        method="POST", data=dict(original_ids, code="raise AssertionError('must not run')")))
+    assert stale.status == 409 and stale.data["error_code"] == "stale_target"
+    followup = execute(host, "assert app.Documents[0].value == 42\nprint('continued')")
+    assert followup.status == 200 and followup.data["output"] == "continued\n"
+
+
+def test_reload_with_raw_transaction_leak_still_blocks_replacement_runtime(application_host):
+    host = application_host
+    original_ids = dict(host.ids)
+
+    def reload_connector():
+        host.reg.expire()
+        host.reg = registry(instance_id=original_ids["instance_id"])
+        snapshot = host.reg.refresh_documents(host.uiapp.Application.Documents)
+        host.ids = {key: snapshot[key] for key in ("instance_id", "runtime_id")}
+        host.execution.register_code_execution_routes(
+            TargetedAPI(host.api, lambda: host.reg, safety=host.safety))
+
+    host.uiapp.Application.ReloadConnector = reload_connector
+    response = execute(host, """
+helper = app.OpenDocumentFile('helper.rfa')
+raw = DB.Transaction(helper, 'Leaked across reload')
+raw.Start()
+app.ReloadConnector()
+""")
+    assert response.status == 500 and response.data["unsafe"] is True
+    assert response.data["rediscovery_required"] is True
+    assert response.data["effects"] == "unknown"
+    assert host.safety.snapshot()["blocked"]
+    assert host.db.created[0].status == "Started" and not host.db.created[0].disposed
+    # A newly registered runtime cannot conceal an unsafe old callback.
+    host.opened[0].IsModifiable = False
+    followup = execute(host, "raise AssertionError('must not run')")
+    assert followup.status == 409 and followup.data["error_code"] == "mutation_blocked"
+
+
+def test_reload_preserves_script_failure_and_rolled_back_effects(application_host):
+    host = application_host
+    host.uiapp.Application.ExpireConnector = host.reg.expire
+    response = execute(host, """
+helper = app.OpenDocumentFile('helper.rfa')
+with execution.transaction(helper, 'Rollback after reload'):
+    helper.value = 42
+    app.ExpireConnector()
+    raise ValueError('script failed after reload')
+""")
+    assert response.status == 500 and response.data["error_type"] == "ValueError"
+    assert "script failed after reload" in response.data["error"]
+    assert response.data["rediscovery_required"] is True
+    assert response.data["owned_effects"] == "rolled_back"
+    assert response.data["unsafe"] is False and not host.safety.snapshot()["blocked"]
+    assert host.opened[0].value == 0
+
+
+@pytest.mark.parametrize("error_code", [None, "stale_target"])
+def test_unconfirmed_identity_refresh_failure_still_latches_guard(application_host, error_code):
+    from revit_mcp.identity import IdentityError
+    host = application_host
+
+    def break_metadata():
+        def fail_refresh(*args):
+            if error_code:
+                raise IdentityError(error_code, 'unexpected identity failure on live runtime')
+            raise RuntimeError('metadata unavailable')
+        host.reg.refresh_documents = fail_refresh
+
+    host.uiapp.Application.BreakMetadata = break_metadata
+    response = execute(host, "app.BreakMetadata()")
+    assert response.status == 500 and response.data["unsafe"] is True
+    assert host.safety.snapshot()["blocked"]
+    assert "rediscovery_required" not in response.data
+    assert response.data["cleanup_errors"][0]["stage"] == "application_identity_snapshot"
+
+
 def test_application_latch_survives_new_route_registration_in_same_appdomain(application_host, monkeypatch):
     from revit_mcp.target_routing import SAFETY_SLOT, get_process_safety
     host = application_host

@@ -86,6 +86,16 @@ def request_payload(request):
     return data
 
 
+def _runtime_expired(registry, error):
+    """Confirm lifecycle expiration, including errors from a prior engine."""
+    if getattr(error, "code", None) != "stale_target":
+        return False
+    try:
+        return registry.snapshot().get("runtime_available") is False
+    except Exception:
+        return False
+
+
 def validate_api_context(registry, endpoint, payload, uiapp):
     """Resolve the specified document, ignoring any active doc supplied by Routes."""
     actual = registry.validate_target(payload.get("instance_id"), payload.get("runtime_id"))
@@ -212,11 +222,25 @@ class TargetedAPI(object):
                                                         if item["document_id"] not in initial_document_ids]
                         except Exception as error:
                             registry.record_refresh_error(error)
-                            body.update(status="error", unsafe=True, effects="unknown")
-                            body.setdefault("cleanup_errors", []).append({"stage": "application_identity_snapshot", "error": str(error)})
-                            status = 500
-                            if self.safety is not None:
-                                self.safety.observe(body, None, payload.get("operation_id"))
+                            diagnostic = {"stage": "application_identity_snapshot", "error": str(error)}
+                            if _runtime_expired(registry, error):
+                                # A reload expires the addressed registry while this
+                                # callback finishes. Native postconditions and owned
+                                # scope cleanup above still govern safety. Keep the
+                                # original receipt/effects; never replay or reset a latch.
+                                body.update(status="error", rediscovery_required=True)
+                                body.setdefault("error_code", "runtime_expired")
+                                body.setdefault("error", "Connector runtime expired during execution; "
+                                                "rediscover the target before further requests")
+                                body.setdefault("identity_errors", []).append(diagnostic)
+                                if status < 400:
+                                    status = 409
+                            else:
+                                body.update(status="error", unsafe=True, effects="unknown")
+                                body.setdefault("cleanup_errors", []).append(diagnostic)
+                                status = 500
+                                if self.safety is not None:
+                                    self.safety.observe(body, None, payload.get("operation_id"))
                 body["actual_target"] = actual
                 return routes.make_response(data=body, status=status, headers=headers)
 
