@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Connector side of the bridge token: storage, extraction, and the root API guard."""
 import inspect
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -122,6 +123,35 @@ def test_guard_strips_callback_even_with_a_valid_token(routes):
     response = routed(request=request)
     assert response.status == 409 and response.data["error_code"] == "callback_unsupported"
     assert "callbackUrl" not in request.data
+    handler.assert_not_called()
+
+
+class PyRevitRequest(object):
+    """pyRevit's Request.callback_url reads data again after the handler returns."""
+    def __init__(self, data):
+        self.data, self.query_params = data, {}
+
+    @property
+    def callback_url(self):
+        return self.data.get("callbackUrl") if isinstance(self.data, dict) else None
+
+
+@pytest.mark.parametrize("with_token", [False, True])
+@pytest.mark.parametrize("as_bytes", [False, True])
+def test_callback_inside_a_text_body_is_removed_before_any_response(routes, with_token, as_bytes):
+    # Parsing a text body creates the dict pyRevit reads callbackUrl from. If it
+    # survived a denial, pyRevit would post the response there and never finish
+    # the synchronous request.
+    body = {"callbackUrl": "http://example.invalid/"}
+    if with_token:
+        body["bridge_token"] = get_or_create_token()
+    raw = json.dumps(body)
+    request = PyRevitRequest(raw.encode("utf-8") if as_bytes else raw)
+    handler = Mock()
+    routed = AuthenticatedAPI(API()).route("/status/", methods=["GET"])(lambda uiapp, request: handler())
+    response = routed(uiapp=None, request=request)
+    assert response.status == 409 and response.data["error_code"] == "callback_unsupported"
+    assert request.callback_url is None
     handler.assert_not_called()
 
 

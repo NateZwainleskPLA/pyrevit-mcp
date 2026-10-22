@@ -118,17 +118,25 @@ def _process_user_sid(pid=None):
 
 
 def require_current_user_listeners(port):
-    """Refuse a port that any process outside this Windows user is listening on.
+    """Refuse a port with no listener, or one held by a process outside this Windows user.
 
     Run before sending the bridge token. Another user on the same machine could
     bind a port the client probes; that process must never receive the token.
     Both address families are checked, since a dual-stack IPv6 socket can
-    receive IPv4 loopback connections.
+    receive IPv4 loopback connections. A listener swapped in between this check
+    and the connect is not detected; that window needs the owned listener to
+    close and another user's to bind the same port within it.
     """
     current = _process_user_sid()
     if current is None:
         raise IdentityError("ownership_unavailable", "cannot read this process's Windows user")
-    for pid in _listener_pids(port) | _listener_pids(port, ipv6=True):
+    owners = _listener_pids(port) | _listener_pids(port, ipv6=True)
+    if not owners:
+        # Otherwise a listener that appears between this check and the connect
+        # would receive the token unchecked.
+        raise IdentityError("target_unreachable",
+                            "Nothing is listening on port %d; the bridge token was not sent" % port)
+    for pid in owners:
         if _process_user_sid(pid) != current:
             raise IdentityError("untrusted_listener",
                                 "Port %d is held by a process outside this Windows user; "

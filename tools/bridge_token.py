@@ -25,5 +25,5 @@ def token_for(url):
         return require_token(explicit, TOKEN_ENV)
     if os.name == "nt":
         from .windows_target_evidence import require_current_user_listeners
-        require_current_user_listeners(parsed.port or 80)
+        require_current_user_listeners(parsed.port or (443 if parsed.scheme == "https" else 80))
     return require_token(explicit, TOKEN_ENV) if explicit else get_or_create_token()

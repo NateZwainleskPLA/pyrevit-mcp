@@ -23,7 +23,8 @@ def test_loopback_token_requires_current_user_listeners(monkeypatch):
     monkeypatch.setattr("tools.windows_target_evidence.require_current_user_listeners", ports.append)
     assert token_for("http://127.0.0.1:48886/revit_mcp/status/") == get_or_create_token()
     assert token_for("http://[::1]/revit_mcp") == get_or_create_token()
-    assert ports == [48886, 80]
+    assert token_for("https://localhost/revit_mcp") == get_or_create_token()
+    assert ports == [48886, 80, 443]  # The port httpx will actually connect to.
 
     def refuse(port):
         raise IdentityError("untrusted_listener", "foreign")
@@ -43,6 +44,63 @@ def test_live_listener_ownership():
     with pytest.raises(IdentityError) as error:
         require_current_user_listeners(135)  # RPC endpoint mapper, owned by a service account.
     assert error.value.code == "untrusted_listener"
+    # A port nobody listens on is refused too: a listener appearing before the
+    # connect would otherwise receive the token unchecked.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        free = probe.getsockname()[1]
+    with pytest.raises(IdentityError) as error:
+        require_current_user_listeners(free)
+    assert error.value.code == "target_unreachable"
+
+
+@pytest.fixture
+def bridge_server():
+    """A real loopback listener recording each request body, GET included."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    bodies = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def _reply(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            bodies.append(json.loads(self.rfile.read(length) or b"null"))
+            payload = b'{"status": "success"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        do_GET = do_POST = _reply
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield "http://127.0.0.1:%d/revit_mcp" % server.server_address[1], bodies
+    server.shutdown()
+    server.server_close()
+
+
+async def test_proxy_settings_never_receive_bridge_requests(monkeypatch, bridge_server, isolated_bridge_token):
+    # httpx honours *_PROXY variables and the Windows system proxy by default,
+    # and does not exempt loopback. A proxy would receive the token in the body.
+    endpoint, bodies = bridge_server
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead_proxy = "http://127.0.0.1:%d" % probe.getsockname()[1]
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(name, dead_proxy)
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    result = await request_revit("POST", endpoint + "/status/", data={"code": "x"})
+    assert result.status_code == 200, result.error
+    with pytest.raises(IdentityError):  # Reached the listener directly; the reply just isn't metadata.
+        await metadata_handshake(endpoint)
+    assert bodies == [{"code": "x", "bridge_token": isolated_bridge_token},
+                      {"bridge_token": isolated_bridge_token}]
 
 
 def test_remote_hosts_need_an_explicit_token(monkeypatch):

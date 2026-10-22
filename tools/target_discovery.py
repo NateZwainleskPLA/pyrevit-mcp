@@ -56,7 +56,8 @@ async def metadata_handshake(endpoint):
     """Only HTTP 200 and validated identity JSON count as a connector."""
     endpoint = endpoint_url(endpoint)
     token = bridge_token.token_for(endpoint)  # Raises before a foreign listener sees anything.
-    async with httpx.AsyncClient(timeout=2.0, follow_redirects=False) as client:
+    # trust_env=False: no environment or system proxy may receive the token.
+    async with httpx.AsyncClient(timeout=2.0, follow_redirects=False, trust_env=False) as client:
         response = await client.request("GET", endpoint + "/metadata/", json={TOKEN_FIELD: token})
         if response.status_code == 401:
             raise IdentityError("bridge_unauthorized", "Revit at %s rejected the bridge token" % endpoint)

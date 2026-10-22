@@ -103,7 +103,8 @@ async def request_revit(
     """Send exactly one request to the supplied URL; never retry a mutation.
 
     The caller owns routing/identity validation and operation reconciliation.
-    An injected client stays open and must itself be configured without retries.
+    An injected client stays open and must itself be configured without retries,
+    and without proxies (trust_env=False): the bridge token is in every body.
     Omitted timeout inherits an injected client's policy; an owned client uses
     30 seconds. An explicit timeout (including None) overrides that policy.
     Connect/pool failures precede delivery; read/write/disconnect failures can
@@ -114,7 +115,9 @@ async def request_revit(
         raise ValueError("Revit transport supports only GET and POST")
     if client is None:
         owned_timeout = 30.0 if timeout is httpx.USE_CLIENT_DEFAULT else timeout
-        async with httpx.AsyncClient(timeout=owned_timeout) as owned_client:
+        # trust_env=False: an environment or Windows system proxy would otherwise
+        # receive loopback requests, bridge token included.
+        async with httpx.AsyncClient(timeout=owned_timeout, trust_env=False) as owned_client:
             return await request_revit(method, url, data=data, params=params,
                                        timeout=timeout, client=owned_client)
 

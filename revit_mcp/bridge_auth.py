@@ -101,12 +101,13 @@ def tokens_equal(supplied, expected):
     return difference == 0 and len(supplied) == len(expected)
 
 
-def take_token(request):
-    """Remove and return the token so handlers, receipts and logs never see it."""
-    query = getattr(request, "query_params", None)
-    if isinstance(query, dict) and TOKEN_FIELD in query:
-        query.pop(TOKEN_FIELD, None)
-        raise BridgeAuthError("bridge_token_in_url", "Send bridge_token in the JSON body, never in the URL")
+def json_body(request):
+    """Replace a text or bytes JSON-object body with its dict; return the dict or None.
+
+    pyRevit parses only application/json bodies. Run this before stripping
+    callbackUrl: parsing a text body creates a dict that pyRevit's
+    request.callback_url then reads.
+    """
     data = getattr(request, "data", None)
     if isinstance(data, (bytes, bytearray)) and not isinstance(data, string_types):
         try:
@@ -120,9 +121,17 @@ def take_token(request):
             return None
         if isinstance(data, dict):
             request.data = data
-    if isinstance(data, dict):
-        return data.pop(TOKEN_FIELD, None)
-    return None
+    return data if isinstance(data, dict) else None
+
+
+def take_token(request):
+    """Remove and return the token so handlers, receipts and logs never see it."""
+    query = getattr(request, "query_params", None)
+    if isinstance(query, dict) and TOKEN_FIELD in query:
+        query.pop(TOKEN_FIELD, None)
+        raise BridgeAuthError("bridge_token_in_url", "Send bridge_token in the JSON body, never in the URL")
+    data = json_body(request)
+    return None if data is None else data.pop(TOKEN_FIELD, None)
 
 
 def check_request(request, expected=get_or_create_token):
@@ -142,8 +151,10 @@ def check_request(request, expected=get_or_create_token):
 def authorize_request(request, expected=get_or_create_token):
     """Return a denial response, or None when the request may proceed."""
     from pyrevit import routes
-    # pyRevit posts the response to callbackUrl after the handler returns;
-    # remove it before anything else, including a denial.
+    # pyRevit posts the response to callbackUrl after the handler returns, and
+    # then never completes a synchronous request. Parse a text body first so a
+    # callbackUrl inside it is visible, then remove it before any response.
+    json_body(request)
     if strip_callback(request):
         return routes.make_response(data={"status": "error", "error_code": "callback_unsupported",
                                           "error": "callbackUrl is not supported", "effects": "none"}, status=409)

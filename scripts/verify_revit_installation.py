@@ -50,7 +50,7 @@ async def verify(case, output, versions=None, api_context=False):
         # Home/modal states may defer ExternalEvent indefinitely. Never poll an
         # API-context route for installation readiness or retry a timed-out one.
         if api_context:
-            with httpx.Client(timeout=5, follow_redirects=False) as client:
+            with httpx.Client(timeout=5, follow_redirects=False, trust_env=False) as client:
                 # Authenticated, so the 409 below proves runtime routing rather than a 401.
                 invalid = client.request("GET", target["endpoint"] + "/status/", params={
                     "instance_id": target["instance_id"], "runtime_id": "00000000-0000-0000-0000-000000000000"},

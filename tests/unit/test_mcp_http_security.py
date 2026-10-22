@@ -26,3 +26,15 @@ def test_streamable_http_rejects_foreign_host_and_origin():
         assert simple_form.status_code == 400
         local = client.post(path, json=INITIALIZE, headers=dict(ACCEPT, origin="http://localhost:6274"))
         assert local.status_code == 200
+
+
+def test_sse_rejects_foreign_host_and_origin():
+    # --sse and --combined serve this app too; a rejected request returns before the stream opens.
+    # The SDK sends the error response, then raises; uvicorn only logs that exception.
+    with TestClient(mcp.sse_app(), base_url="http://127.0.0.1:8000", raise_server_exceptions=False) as client:
+        path = mcp.settings.sse_path
+        assert client.get(path, headers={"host": "attacker.example:8000"}).status_code == 421
+        assert client.get(path, headers={"origin": "https://attacker.example"}).status_code == 403
+        message = client.post(mcp.settings.message_path + "?session_id=" + "0" * 32, json=INITIALIZE,
+                              headers={"host": "attacker.example:8000"})
+        assert message.status_code == 421
