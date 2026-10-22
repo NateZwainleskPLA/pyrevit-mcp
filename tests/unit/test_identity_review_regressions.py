@@ -293,6 +293,11 @@ def test_strict_initialization_still_raises_without_legacy_metadata(native_host)
     assert not api.handlers
 
 
+def _authenticated():
+    from revit_mcp.bridge_auth import get_or_create_token
+    return SimpleNamespace(data={"bridge_token": get_or_create_token()})
+
+
 @pytest.mark.parametrize("failure", [None, "early", "partial"])
 def test_targeted_startup_requires_strict_identity_without_legacy_fallback(native_host, monkeypatch, failure):
     api = CapturedAPI()
@@ -335,13 +340,14 @@ def test_targeted_startup_requires_strict_identity_without_legacy_fallback(nativ
         # Partial strict initialization can have registered cached metadata;
         # it must never turn into a degraded legacy success/fallback.
         if "/metadata/" in api.handlers:
-            assert api.handlers["/metadata/"]()["status"] != 503
+            assert api.handlers["/metadata/"](request=_authenticated())["status"] != 503
         return
     spec.loader.exec_module(startup)
     assert len(calls) == 6
     assert "/health/" not in api.handlers
     assert list(inspect.signature(api.handlers["/status/"]).parameters) == ["uiapp", "request"]
-    metadata_response = api.handlers["/metadata/"]()
+    assert api.handlers["/metadata/"]()["status"] == 401  # metadata names open documents
+    metadata_response = api.handlers["/metadata/"](request=_authenticated())
     assert metadata_response["status"] == 200
     assert validate_snapshot(metadata_response["data"])["endpoint"] == "http://127.0.0.1:48884/revit_mcp"
 

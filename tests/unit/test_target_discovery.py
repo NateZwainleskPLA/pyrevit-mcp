@@ -142,7 +142,7 @@ async def test_multiple_targets_discovery_and_injected_tools_do_not_select(mock_
 
 
 @pytest.mark.parametrize("status,body", [(503, {"status": "active"}), (200, {"status": "active"}), (200, "not JSON"), (302, {})])
-async def test_http_handshake_does_not_accept_any_response(monkeypatch, status, body):
+async def test_http_handshake_does_not_accept_any_response(monkeypatch, status, body, isolated_bridge_token):
     class Client:
         def __init__(self, **kwargs):
             assert not kwargs["follow_redirects"]
@@ -150,8 +150,9 @@ async def test_http_handshake_does_not_accept_any_response(monkeypatch, status, 
             return self
         async def __aexit__(self, *args):
             pass
-        async def get(self, url):
-            request = httpx.Request("GET", url)
+        async def request(self, method, url, json=None):
+            assert method == "GET" and json == {"bridge_token": isolated_bridge_token}
+            request = httpx.Request(method, url)
             return httpx.Response(status, request=request, json=body) if not isinstance(body, str) else httpx.Response(status, request=request, text=body)
     monkeypatch.setattr("tools.target_discovery.httpx.AsyncClient", Client)
     with pytest.raises((httpx.HTTPError, IdentityError, ValueError)):

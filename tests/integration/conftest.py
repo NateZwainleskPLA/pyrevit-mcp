@@ -4,6 +4,9 @@ import os
 import pytest
 import httpx
 
+from revit_mcp.bridge_auth import TOKEN_FIELD
+from tools.bridge_token import token_for
+
 BASE_URL = "http://127.0.0.1:48884/revit_mcp"
 TEST_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "test.rvt")
 
@@ -12,7 +15,7 @@ async def _revit_get(endpoint, ctx=None, **kwargs):
     """Real HTTP GET to pyRevit Routes."""
     timeout = kwargs.pop("timeout", 30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.get(f"{BASE_URL}{endpoint}")
+        response = await client.request("GET", f"{BASE_URL}{endpoint}", json={TOKEN_FIELD: token_for(BASE_URL)})
         if response.status_code == 200:
             return response.json()
         return f"Error: {response.status_code} - {response.text}"
@@ -21,7 +24,7 @@ async def _revit_get(endpoint, ctx=None, **kwargs):
 async def _revit_post(endpoint, data, ctx=None, **kwargs):
     """Real HTTP POST to pyRevit Routes."""
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(f"{BASE_URL}{endpoint}", json=data)
+        response = await client.post(f"{BASE_URL}{endpoint}", json=dict(data, **{TOKEN_FIELD: token_for(BASE_URL)}))
         if response.status_code == 200:
             return response.json()
         return f"Error: {response.status_code} - {response.text}"

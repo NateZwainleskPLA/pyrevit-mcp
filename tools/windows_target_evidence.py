@@ -68,6 +68,73 @@ def _listener_pids(port, ipv6=False):
     raise IdentityError("ownership_unavailable", "listener ownership changed during inspection")
 
 
+def _process_user_sid(pid=None):
+    """String SID of a process's user (default: this process), or None if it cannot be read.
+
+    Another user's process normally refuses OpenProcess or OpenProcessToken
+    to a non-administrator, which also yields None.
+    """
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi.OpenProcessToken.restype = wintypes.BOOL
+    advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                           wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    advapi.GetTokenInformation.restype = wintypes.BOOL
+    advapi.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    advapi.ConvertSidToStringSidW.restype = wintypes.BOOL
+    process = kernel.GetCurrentProcess() if pid is None else kernel.OpenProcess(0x1000, False, pid)
+    if not process:
+        return None
+    token = wintypes.HANDLE()
+    try:
+        if not advapi.OpenProcessToken(process, 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+            return None
+        try:
+            size = wintypes.DWORD(0)
+            advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))  # TokenUser
+            buffer = ctypes.create_string_buffer(size.value)
+            if not size.value or not advapi.GetTokenInformation(token, 1, buffer, size, ctypes.byref(size)):
+                return None
+            sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p))[0]  # TOKEN_USER.User.Sid
+            text = wintypes.LPWSTR()
+            if not advapi.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+                return None
+            try:
+                return text.value
+            finally:
+                kernel.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+        finally:
+            kernel.CloseHandle(token)
+    finally:
+        if pid is not None:
+            kernel.CloseHandle(process)
+
+
+def require_current_user_listeners(port):
+    """Refuse a port that any process outside this Windows user is listening on.
+
+    Run before sending the bridge token. Another user on the same machine could
+    bind a port the client probes; that process must never receive the token.
+    Both address families are checked, since a dual-stack IPv6 socket can
+    receive IPv4 loopback connections.
+    """
+    current = _process_user_sid()
+    if current is None:
+        raise IdentityError("ownership_unavailable", "cannot read this process's Windows user")
+    for pid in _listener_pids(port) | _listener_pids(port, ipv6=True):
+        if _process_user_sid(pid) != current:
+            raise IdentityError("untrusted_listener",
+                                "Port %d is held by a process outside this Windows user; "
+                                "the bridge token was not sent" % port)
+
+
 def validate_windows_ownership(snapshot):
     actual = _process_start(snapshot["process_id"])
     try:

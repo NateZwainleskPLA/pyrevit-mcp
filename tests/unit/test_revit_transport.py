@@ -93,13 +93,14 @@ async def test_failure_classification_and_no_retry(exc_type, kind, unknown):
 
 
 @pytest.mark.parametrize("failure", [httpx.ReadTimeout, httpx.RemoteProtocolError])
-async def test_lost_receipt_after_admission_inspects_original_id(failure):
+async def test_lost_receipt_after_admission_inspects_original_id(failure, isolated_bridge_token):
     admitted = {}
     submissions = []
 
     def handler(request):
         if request.method == "POST":
             payload = json.loads(request.content)
+            assert payload.pop("bridge_token") == isolated_bridge_token
             submissions.append(payload)
             admitted[payload["operation_id"]] = {"operation_id": payload["operation_id"],
                                                   "state": "succeeded", "effects": "committed"}
