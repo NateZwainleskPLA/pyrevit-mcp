@@ -222,9 +222,12 @@ Every request to the `revit_mcp` Routes API must include `"bridge_token"` in its
 Once installed, check that the Routes API answers with the token. A browser can't send it, so use PowerShell:
 
 ```powershell
-$token = Get-Content "$env:LOCALAPPDATA\RevitMCP\bridge-token"
-curl.exe -s -X GET http://127.0.0.1:48884/revit_mcp/metadata/ -H "Content-Type: application/json" -d "{\"bridge_token\": \"$token\"}"
+$token = (Get-Content "$env:LOCALAPPDATA\RevitMCP\bridge-token").Trim()
+@{ bridge_token = $token } | ConvertTo-Json -Compress |
+    curl.exe -s -X GET http://127.0.0.1:48884/revit_mcp/metadata/ -H "Content-Type: application/json" --data-binary "@-"
 ```
+
+The body goes through stdin because PowerShell mangles quotes inside arguments passed to `curl.exe`.
 
 A working connector returns its identity (`instance_id`, `runtime_id`, `process_id`, `revit_version`) and its open documents.
 
