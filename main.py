@@ -4,6 +4,7 @@ import sys
 import json
 import anyio
 from mcp.server.fastmcp import FastMCP, Image, Context
+from mcp.server.transport_security import TransportSecuritySettings
 import base64
 from typing import Optional, Dict, Any, Union
 from tools.revit_transport import RevitTransportResult, request_revit
@@ -17,11 +18,18 @@ from revit_mcp.routing_policy import RoutingPolicyError
 # Create a generic MCP server for interacting with Revit
 # Use stateless_http=True and json_response=True for better compatibility
 mcp = FastMCP(
-    "Revit MCP Server", 
-    host="127.0.0.1", 
+    "Revit MCP Server",
+    host="127.0.0.1",
     port=8000,
     stateless_http=True,
-    json_response=True
+    json_response=True,
+    # The HTTP transports reach execute_code. Reject DNS-rebinding (foreign Host)
+    # and cross-site browser requests (foreign Origin); non-browser clients send no Origin.
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
+        allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+    ),
 )
 
 target_directory = TargetDirectory(os.environ.get("REVIT_TARGET_STATE"))
