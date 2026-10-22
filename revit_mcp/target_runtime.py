@@ -90,8 +90,12 @@ def register_metadata_routes(api, registry):
         return routes.make_response(data=registry.snapshot())
 
     @api.route('/metadata/refresh/', methods=["GET"])
-    def refresh_metadata(uiapp, instance_id=None, runtime_id=None):
+    def refresh_metadata(uiapp, instance_id=None, runtime_id=None, request=None):
         from .identity import IdentityError
+        from .routing_policy import strip_callback
+        if strip_callback(request):
+            return routes.make_response(data={"error": "callbackUrl is not supported",
+                                               "error_code": "callback_unsupported"}, status=409)
         try:
             registry.validate_target(instance_id, runtime_id)
             return routes.make_response(data=refresh_uiapp(registry, uiapp))

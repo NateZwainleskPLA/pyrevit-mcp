@@ -4,7 +4,8 @@ import json
 from contextlib import contextmanager
 
 from .identity import IdentityError, string_types
-from .routing_policy import APPLICATION_ROUTES, MUTATION_ROUTES, RoutingPolicyError, check_ui_policy, route_policy
+from .routing_policy import (APPLICATION_ROUTES, MUTATION_ROUTES, RoutingPolicyError, check_ui_policy, route_policy,
+                             strip_callback)
 from .target_registry import get_registry, same_document
 from .execution_safety import ExecutionSafety, MutationBlockedError
 
@@ -146,6 +147,8 @@ class TargetedAPI(object):
 
             def invoke(uiapp, request, view_name=None):
                 from pyrevit import routes
+                # Before anything that can raise: pyRevit posts to callbackUrl after we return.
+                callback_requested = strip_callback(request)
                 actual, body, payload = {}, {}, {}
                 doc, admitted = None, False
                 initial_document_ids = None
@@ -154,6 +157,8 @@ class TargetedAPI(object):
                     registry = self.registry_getter()
                     snap = registry.snapshot()
                     actual = {k: snap[k] for k in ("instance_id", "runtime_id")}
+                    if callback_requested:
+                        raise RoutingPolicyError("callback_unsupported", "callbackUrl is not supported")
                     payload = request_payload(request)
                     doc, uidoc, actual = validate_api_context(registry, endpoint, payload, uiapp)
                     if endpoint in MUTATION_ROUTES and self.safety is not None:

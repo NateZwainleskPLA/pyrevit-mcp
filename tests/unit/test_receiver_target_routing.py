@@ -96,6 +96,25 @@ def test_get_request_and_real_uiapp_signature_are_retained(host):
     assert response.data["view_name"] == "Level 1"
 
 
+def test_callback_url_is_removed_and_rejected_before_handler(host):
+    reg, a, b, app, ids = host
+    api = API()
+    handler = Mock()
+
+    @TargetedAPI(api, lambda: reg).route("/execute_code/", methods=["POST"])
+    def execute(doc, request):
+        handler(doc)
+        return {"status": "success"}
+
+    request = SimpleNamespace(method="POST", data=dict(ids, code="pass", callbackUrl="http://127.0.0.1:9/x"))
+    response = execute(app, request)
+    assert response.status == 409
+    assert response.data["error_code"] == "callback_unsupported"
+    assert response.data["actual_target"] == {k: ids[k] for k in ("instance_id", "runtime_id")}
+    assert "callbackUrl" not in request.data  # pyRevit re-reads it after we return
+    handler.assert_not_called()
+
+
 def test_mutation_admission_guard_runs_before_handler(host):
     reg, a, b, app, ids = host
     from revit_mcp.routing_policy import RoutingPolicyError
