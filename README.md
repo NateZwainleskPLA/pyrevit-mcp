@@ -199,15 +199,14 @@ pyRevit will start listening on port `http://localhost:48884/`
 
 ### Manual Installation on a custom directory:
 
-1. Clone the repo in a custom location:
+1. Clone the repo into a folder that holds your pyRevit extensions, giving the clone an `.extension` name:
     ```bash
-    git clone -b main https://github.com/NateZwainleskPLA/pyrevit-mcp
+    git clone -b main https://github.com/NateZwainleskPLA/pyrevit-mcp pyrevit-mcp.extension
     ```
-2. Add `.extension` to the root folder name
-3. In Revit, navigate to the pyRevit tab
-4. Open Settings
-5. Under "Custom Extensions", add the path to the `.extension` folder
-6. Save settings and reload pyRevit (you might need to restart Revit entirely)
+2. In Revit, navigate to the pyRevit tab
+3. Open Settings
+4. Under "Custom Extensions", add the **parent** folder, the one that contains `pyrevit-mcp.extension`. pyRevit loads the extensions inside each listed folder, so listing the `.extension` folder itself loads nothing.
+5. Save settings and reload pyRevit (you might need to restart Revit entirely)
 
 ## Testing Your Connection
 
