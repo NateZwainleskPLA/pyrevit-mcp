@@ -7,7 +7,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from revit_mcp.bridge_auth import TOKEN_FIELD
 from revit_mcp.identity import IdentityError, endpoint_url, validate_snapshot
+from . import bridge_token
 
 
 def registration_directory():
@@ -53,8 +55,12 @@ def configured_candidates():
 async def metadata_handshake(endpoint):
     """Only HTTP 200 and validated identity JSON count as a connector."""
     endpoint = endpoint_url(endpoint)
-    async with httpx.AsyncClient(timeout=2.0, follow_redirects=False) as client:
-        response = await client.get(endpoint + "/metadata/")
+    token = bridge_token.token_for(endpoint)  # Raises before a foreign listener sees anything.
+    # trust_env=False: no environment or system proxy may receive the token.
+    async with httpx.AsyncClient(timeout=2.0, follow_redirects=False, trust_env=False) as client:
+        response = await client.request("GET", endpoint + "/metadata/", json={TOKEN_FIELD: token})
+        if response.status_code == 401:
+            raise IdentityError("bridge_unauthorized", "Revit at %s rejected the bridge token" % endpoint)
         response.raise_for_status()
         if response.status_code != 200:
             raise IdentityError("invalid_metadata", "metadata handshake requires HTTP 200")

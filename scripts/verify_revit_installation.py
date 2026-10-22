@@ -10,6 +10,8 @@ import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from revit_mcp.bridge_auth import TOKEN_FIELD
+from tools.bridge_token import token_for
 from tools.target_directory import TargetDirectory
 from tools.target_discovery import TargetDiscovery
 from tools.target_router import TargetRouter
@@ -48,9 +50,11 @@ async def verify(case, output, versions=None, api_context=False):
         # Home/modal states may defer ExternalEvent indefinitely. Never poll an
         # API-context route for installation readiness or retry a timed-out one.
         if api_context:
-            with httpx.Client(timeout=5, follow_redirects=False) as client:
-                invalid = client.get(target["endpoint"] + "/status/", params={
-                    "instance_id": target["instance_id"], "runtime_id": "00000000-0000-0000-0000-000000000000"})
+            with httpx.Client(timeout=5, follow_redirects=False, trust_env=False) as client:
+                # Authenticated, so the 409 below proves runtime routing rather than a 401.
+                invalid = client.request("GET", target["endpoint"] + "/status/", params={
+                    "instance_id": target["instance_id"], "runtime_id": "00000000-0000-0000-0000-000000000000"},
+                    json={TOKEN_FIELD: token_for(target["endpoint"])})
             status = await router.call("GET", "/status/", target=target["target"], timeout=5)
             row.update(foreign_runtime_status=invalid.status_code,
                        foreign_runtime_body=invalid.json(), status_http=status.status_code,

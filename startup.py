@@ -7,10 +7,19 @@ Registers all MCP routes and initializes the API
 from pyrevit import routes
 import logging
 
+from revit_mcp.bridge_auth import AuthenticatedAPI, get_or_create_token
+
 logger = logging.getLogger(__name__)
 
-# Initialize the main API
-api = routes.API("revit_mcp")
+# Initialize the main API. Every route registered through it, by any wrapper,
+# requires the bridge token before its handler runs.
+api = AuthenticatedAPI(routes.API("revit_mcp"))
+
+# Create the token at load so it exists before the first client request.
+try:
+    get_or_create_token()
+except Exception as e:
+    logger.error("Bridge token unavailable; every request will be refused: %s", str(e))
 
 
 def register_routes(legacy_api_enabled=True):

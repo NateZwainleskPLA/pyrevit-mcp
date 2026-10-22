@@ -165,10 +165,10 @@ def test_targeted_startup_omits_legacy_raw_liveness(registered_routes, monkeypat
     spec = importlib.util.spec_from_file_location("_test_legacy_startup", source)
     startup = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(startup)
-    assert set(startup.api.handlers) == {
+    assert set(startup.api.api.handlers) == {
         ("/status/", ("GET",)), ("/model_info/", ("GET",)),
     }
-    assert "uiapp" in inspect.signature(startup.api.handlers[("/status/", ("GET",))]).parameters
+    assert "uiapp" in inspect.signature(startup.api.api.handlers[("/status/", ("GET",))]).parameters
     assert registered_routes.document_reads == []
 
 

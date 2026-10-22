@@ -133,6 +133,8 @@ So with that knowledge, we are going to define our new API. We are using `revit_
 api = routes.API('revit_mcp')
 ```
 
+In this repository, don't create this object yourself. `startup.py` creates it once and wraps it in `AuthenticatedAPI`, which requires the bridge token on every request; register new routes through startup's `targeted_api` (see "Register the Route Module" below).
+
 ## API Endpoints
 
 Now that we have the API ready, we can define our API end points. To collect doors from an active Revit model, we would want to collect (HTTP method GET) and the `doors/` in active model using our custom API `revit_mcp/`. So our API endpoint would look like this:
@@ -613,30 +615,16 @@ Finally, register both the route module and the tool module. This makes them act
 
 **1. Register the Route Module:**
 
-Open `revit-mcp-python.extension/startup.py` and add your new route registration function.
+First add each new endpoint to `ROUTES` in `revit_mcp/routing_policy.py`; `TargetedAPI` refuses routes without a policy. Then register your module in `startup.py`, inside `register_routes()`, next to the existing registrations:
 
 ```
-# In revit-mcp-python.extension/startup.py
-
-# ... (other imports)
-# Import the registration function from your new module
+# In startup.py, inside register_routes()
 from revit_mcp.your_module import register_your_routes
 
-def register_routes():
-    """Register all MCP route modules"""
-    api = routes.API('revit_mcp')
-    try:
-        # ... (existing route registrations)
-
-        # Register your new routes (this registers all functions inside)
-        register_your_routes(api)
-
-        logger.info("All MCP routes registered successfully")
-    except Exception as e:
-        logger.error("Failed to register MCP routes: {}".format(str(e)))
-        raise
-
+register_your_routes(targeted_api)
 ```
+
+Register routes only through `targeted_api` (or startup's module-level `api`). Never create another `routes.API('revit_mcp')`: pyRevit adds its routes to the same API, but without the bridge token check.
 
 **2. Register the Tool Module:**
 

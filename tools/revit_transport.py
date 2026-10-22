@@ -10,6 +10,10 @@ from typing import Any
 
 import httpx
 
+from revit_mcp.bridge_auth import TOKEN_FIELD
+from revit_mcp.identity import IdentityError
+from . import bridge_token
+
 
 @dataclass(frozen=True)
 class RevitTransportResult:
@@ -99,7 +103,8 @@ async def request_revit(
     """Send exactly one request to the supplied URL; never retry a mutation.
 
     The caller owns routing/identity validation and operation reconciliation.
-    An injected client stays open and must itself be configured without retries.
+    An injected client stays open and must itself be configured without retries,
+    and without proxies (trust_env=False): the bridge token is in every body.
     Omitted timeout inherits an injected client's policy; an owned client uses
     30 seconds. An explicit timeout (including None) overrides that policy.
     Connect/pool failures precede delivery; read/write/disconnect failures can
@@ -110,15 +115,20 @@ async def request_revit(
         raise ValueError("Revit transport supports only GET and POST")
     if client is None:
         owned_timeout = 30.0 if timeout is httpx.USE_CLIENT_DEFAULT else timeout
-        async with httpx.AsyncClient(timeout=owned_timeout) as owned_client:
+        # trust_env=False: an environment or Windows system proxy would otherwise
+        # receive loopback requests, bridge token included.
+        async with httpx.AsyncClient(timeout=owned_timeout, trust_env=False) as owned_client:
             return await request_revit(method, url, data=data, params=params,
                                        timeout=timeout, client=owned_client)
 
     try:
-        request = client.build_request(method, url, params=params,
-                                       **({"json": data} if method == "POST" else {}),
-                                       timeout=timeout)
-    except (httpx.InvalidURL, TypeError, ValueError) as exc:
+        # pyRevit hides headers from handlers, so the token rides in the JSON
+        # body, GET included (pyRevit reads a GET body). Never in the URL.
+        token = bridge_token.token_for(url)
+        body = dict(data or {}) if method == "POST" else {}
+        body[TOKEN_FIELD] = token
+        request = client.build_request(method, url, params=params, json=body, timeout=timeout)
+    except (httpx.InvalidURL, TypeError, ValueError, IdentityError) as exc:
         return _request_failure(method, url, "request_error", exc, unknown=False)
 
     try:

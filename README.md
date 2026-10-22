@@ -13,8 +13,8 @@
 > Upstream fixes are cherry-picked by hand with `git cherry-pick -x`, so each one records its
 > upstream commit. The `upstream` remote is fetch-only.
 >
-> The bridge has no authentication. Any process running as your Windows user can call it on
-> loopback, including `execute_code`.
+> Every bridge request must carry a per-user token (see [Bridge token](#bridge-token)). Processes
+> running as your Windows user can read that token, so they are trusted, the same as Revit itself.
 
 ## A pyRevit-oriented implementation of the Model Context Protocol (MCP) for Autodesk Revit
 
@@ -208,23 +208,25 @@ pyRevit will start listening on port `http://localhost:48884/`
 4. Under "Custom Extensions", add the **parent** folder, the one that contains `pyrevit-mcp.extension`. pyRevit loads the extensions inside each listed folder, so listing the `.extension` folder itself loads nothing.
 5. Save settings and reload pyRevit (you might need to restart Revit entirely)
 
+## Bridge token
+
+Every request to the `revit_mcp` Routes API must include `"bridge_token"` in its JSON body, GET requests included. pyRevit does not pass HTTP headers to route handlers, so a header can't be used. A request without the token gets HTTP 401 before any handler runs, which stops web pages from driving Revit, including through DNS rebinding.
+
+- The token lives in `%LOCALAPPDATA%\RevitMCP\bridge-token`. Revit creates it when it loads the extension (or the MCP server does, if it runs first). To rotate it, delete the file; both sides read it on every request, and the next one creates a new token.
+- The MCP server sends it only to loopback ports where every listening process belongs to your Windows user, and never in a URL.
+- A client on another machine or in WSL can't read the file. Set `REVIT_MCP_BRIDGE_TOKEN` in that client's environment to the file's contents from the Revit machine.
+- The MCP server's own HTTP transports (`--sse`, `--streamable-http`, `--combined`) accept only loopback `Host` and `Origin` headers.
+
 ## Testing Your Connection
 
-Once installed, test that the Routes API is working:
+Once installed, check that the Routes API answers with the token. A browser can't send it, so use PowerShell:
 
-1. Open your web browser and go to:
-   ```
-   http://localhost:48884/revit_mcp/status/
-   ```
+```powershell
+$token = Get-Content "$env:LOCALAPPDATA\RevitMCP\bridge-token"
+curl.exe -s -X GET http://127.0.0.1:48884/revit_mcp/metadata/ -H "Content-Type: application/json" -d "{\"bridge_token\": \"$token\"}"
+```
 
-2. If successful, you should see a response like:
-   ```json
-   {"status": "active",
-    "health": "healthy",
-    "revit_available": true,
-    "document_title": "your_revit_filename",
-    "api_name": "revit_mcp"}
-   ```
+A working connector returns its identity (`instance_id`, `runtime_id`, `process_id`, `revit_version`) and its open documents.
 
 The Routes Service will now load automatically whenever you start Revit. To disable it, simply remove the extension path from the pyRevit settings.
 
@@ -434,29 +436,16 @@ def register_your_tools(mcp, revit_get, revit_post, revit_image=None):
 
 ### 1. Register the Route Module
 
-Open `revit-mcp-python.extension/startup.py` and add your new route registration function.
+First add each new endpoint to `ROUTES` in `revit_mcp/routing_policy.py`; `TargetedAPI` refuses routes without a policy. Then register your module in `startup.py`, inside `register_routes()`, next to the existing registrations:
 
 ```python
-# In revit-mcp-python.extension/startup.py
-
-# ... (other imports)
-# Import the registration function from your new module
+# In startup.py, inside register_routes()
 from revit_mcp.your_module import register_your_routes
 
-def register_routes():
-    """Register all MCP route modules"""
-    api = routes.API('revit_mcp')
-    try:
-        # ... (existing route registrations)
-
-        # Register your new routes (this registers all functions inside)
-        register_your_routes(api)
-
-        logger.info("All MCP routes registered successfully")
-    except Exception as e:
-        logger.error("Failed to register MCP routes: {}".format(str(e)))
-        raise
+register_your_routes(targeted_api)
 ```
+
+Register routes only through `targeted_api` (or startup's module-level `api`). Never create another `routes.API('revit_mcp')`: pyRevit adds its routes to the same API, but without the bridge token check.
 
 ### 2. Register the Tool Module
 
