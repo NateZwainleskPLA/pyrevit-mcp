@@ -76,6 +76,19 @@ def test_refresh_failure_preserves_snapshot_and_returns_503(monkeypatch):
     assert result["data"]["snapshot_error"]
 
 
+def test_refresh_removes_and_rejects_callback_url(monkeypatch):
+    install_routes_mock(monkeypatch)
+    reg = registry(clock=lambda: 100)
+    snap = reg.refresh_documents([Document()])
+    api = CapturedAPI()
+    register_metadata_routes(api, reg)
+    request = SimpleNamespace(data={"callbackUrl": "http://127.0.0.1:9/x"})
+    result = api.handlers["/metadata/refresh/"](None, snap["instance_id"], snap["runtime_id"], request=request)
+    assert result["status"] == 409
+    assert result["data"]["error_code"] == "callback_unsupported"
+    assert request.data == {}
+
+
 async def test_discovery_is_explicit_and_rejects_stale_registration_and_non_metadata():
     directory = TargetDirectory()
     snapshots = {

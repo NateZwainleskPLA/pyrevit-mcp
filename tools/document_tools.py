@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Document management tools for Revit MCP Server"""
 
+from typing import Optional
+
 from mcp.server.fastmcp import Context
 from .utils import format_response
 
@@ -83,7 +85,7 @@ def register_document_tools(mcp, revit_get, revit_post):
         target: str,
         document: str,
         ctx: Context,
-        file_path: str = None,
+        file_path: Optional[str] = None,
     ) -> str:
         """Save the specified Revit document.
 

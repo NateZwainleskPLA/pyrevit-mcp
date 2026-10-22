@@ -2,7 +2,7 @@
 """Family and placement tools"""
 
 from mcp.server.fastmcp import Context
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from .utils import format_response
 
 
@@ -14,13 +14,13 @@ def register_family_tools(mcp, revit_get, revit_post):
         target: str,
         document: str,
         family_name: str,
-        type_name: str = None,
+        type_name: Optional[str] = None,
         x: float = 0.0,
         y: float = 0.0,
         z: float = 0.0,
         rotation: float = 0.0,
-        level_name: str = None,
-        properties: Dict[str, Any] = None,
+        level_name: Optional[str] = None,
+        properties: Optional[Dict[str, Any]] = None,
         ctx: Context = None,
     ) -> str:
         """Place a family instance at a specified location in the Revit model"""
@@ -41,7 +41,7 @@ def register_family_tools(mcp, revit_get, revit_post):
     async def list_families(
         target: str,
         document: str,
-        contains: str = None,
+        contains: Optional[str] = None,
         limit: int = 50,
         ctx: Context = None,
     ) -> str:

@@ -46,8 +46,22 @@ class RoutingPolicyError(ValueError):
         self.code = code
 
 
+def strip_callback(request):
+    """Remove a pyRevit callbackUrl; True when the request carried one.
+
+    For API-context routes pyRevit replies 204 and later posts the handler's
+    response to callbackUrl, reading it again after the handler returns.
+    Popping it means no outbound request is made, even for a rejected call.
+    """
+    data = getattr(request, "data", None)
+    if isinstance(data, dict) and "callbackUrl" in data:
+        data.pop("callbackUrl", None)
+        return True
+    return False
+
+
 def route_policy(endpoint):
-    key = "/get_view/" if endpoint.startswith("/get_view/") else endpoint
+    key ="/get_view/" if endpoint.startswith("/get_view/") else endpoint
     if key not in ROUTES:
         raise RoutingPolicyError("unknown_route", "No targeting policy for this route")
     return ROUTES[key]
