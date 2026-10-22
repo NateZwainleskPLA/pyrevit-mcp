@@ -1,5 +1,21 @@
 # MCP server for Revit - Python
 
+> **This is a separately maintained fork.** It split from
+> [mcp-servers-for-revit/mcp-server-for-revit-python](https://github.com/mcp-servers-for-revit/mcp-server-for-revit-python)
+> at `4e8ec5f` (October 2026) and does not merge back. The main branch is `main`; when someone
+> says `master`, they mean upstream.
+>
+> The two projects want different things. Upstream is heading for the Autodesk Marketplace, with
+> pairing and an in-Revit approval dialog on each request. This fork is built for unattended agent
+> work: explicit target and document routing, recoverable operations with receipts, listener
+> lifecycle control, and the family backport tools.
+>
+> Upstream fixes are cherry-picked by hand with `git cherry-pick -x`, so each one records its
+> upstream commit. The `upstream` remote is fetch-only.
+>
+> The bridge has no authentication. Any process running as your Windows user can call it on
+> loopback, including `execute_code`.
+
 ## A pyRevit-oriented implementation of the Model Context Protocol (MCP) for Autodesk Revit
 
 ## **How?**
@@ -172,6 +188,8 @@ pyRevit will start listening on port `http://localhost:48884/`
 
 ### Install from pyRevit:
 
+> This installs the upstream extension, not this fork. To run the fork, use the manual installation below.
+
 1. In Revit, navigate to the pyRevit tab
 2. Open Extensions
 3. Select the MCP Server for Revit Python Extension > Install extension
@@ -183,7 +201,7 @@ pyRevit will start listening on port `http://localhost:48884/`
 
 1. Clone the repo in a custom location:
     ```bash
-    git clone https://github.com/mcp-servers-for-revit/mcp-server-for-revit-python
+    git clone -b main https://github.com/NateZwainleskPLA/pyrevit-mcp
     ```
 2. Add `.extension` to the root folder name
 3. In Revit, navigate to the pyRevit tab
