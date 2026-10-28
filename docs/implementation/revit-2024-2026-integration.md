@@ -36,26 +36,33 @@ Revit 2024, 2025 and 2026 are already attached to the installed pyRevit 7 clone,
 with the .NET Framework engine for 2024 and .NET engines for 2025/2026.
 
 The existing `revit-mcp-python.extension` contains local edits. The installer
-backs up its exact startup and the Codex client configuration before replacing
-the startup with a version-scoped dispatcher. Revit 2024–2026 execute the
+backs up its exact startup, the Codex client configuration and the Claude Code
+client entry before replacing the startup with a version-scoped dispatcher. Revit 2024–2026 execute the
 preserved local pre-registration Routes guards, then load this integration
 checkout. Other Revit years execute the complete original startup. Existing
 extension modules, local edits, pyRevit binaries, add-in manifests and extension
 enable/disable settings are not rewritten.
 
-The existing Codex `revit-mcp-python` server points directly at the integration
-virtual environment and `main.py`. Its directory state is persisted under the
-installation backup root so opaque handles survive client restarts. Restart
-the MCP client connection to obtain the new explicit target/document tool
-signatures. One client discovers all three versions; each directed call must
-specify its target.
+The existing Codex and Claude Code `revit-mcp-python` servers point directly at
+the integration virtual environment and `main.py`. Both share one directory
+state, persisted under the installation backup root, so opaque handles survive
+client restarts and work in either client. Restart the MCP client connections to
+obtain the new explicit target/document tool signatures. One client discovers
+all three versions; each directed call must specify its target. Don't add
+per-version client entries.
+
+`--claude-config` changes only the user-scope `revit-mcp-python` entry in
+`~/.claude.json`. The entry must already exist. Like the Codex section, an entry
+with environment settings other than `REVIT_TARGET_STATE` is refused for manual
+reconciliation.
 
 ```powershell
 .venv/Scripts/python.exe -m scripts.install_revit_integration `
   --source D:/CodexWorktrees/pyrevit-mcp-integration-revit-2024-2026 `
   --legacy-extension 'D:/OneDrive - PLA Designs/Documents/pyRevit/revit-mcp-python.extension' `
   --backup-root "$env:LOCALAPPDATA/RevitMCP/integration-installs" `
-  --codex-config "$env:USERPROFILE/.codex/config.toml"
+  --codex-config "$env:USERPROFILE/.codex/config.toml" `
+  --claude-config "$env:USERPROFILE/.claude.json"
 ```
 
 The installer emits `installation.json` and original file backups in a fresh
@@ -64,7 +71,11 @@ the deployed commit, actual source module paths, target metadata, or an error.
 These runtime records are local evidence, not committed credentials/config.
 
 Rollback requires unchanged installed files; it refuses to overwrite subsequent
-user edits. Restart Revit/client after restoration:
+user edits. Claude Code rewrites the rest of `~/.claude.json` constantly, so
+that file is never backed up or restored whole. The manifest records the
+original and installed `revit-mcp-python` entry, and rollback puts back only
+that entry, provided it still matches what was installed. Restart Revit/client
+after restoration:
 
 ```powershell
 .venv/Scripts/python.exe -m scripts.install_revit_integration `
