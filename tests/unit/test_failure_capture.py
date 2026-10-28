@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from revit_mcp import failure_notice
 from revit_mcp.execution_context import ExecutionContext
 from revit_mcp.execution_output import execute_script
 from revit_mcp.failure_capture import FailureCapture
@@ -12,6 +13,16 @@ from tools.utils import format_response
 
 OVERLAP = "Highlighted walls overlap."
 CANT_SET = "Cant set parameter"
+
+
+@pytest.fixture(autouse=True)
+def notices(monkeypatch):
+    """No real window in tests; records what the user's notice would show."""
+    monkeypatch.setattr(failure_notice, "_state", {"window": None, "box": None, "entries": [], "count": 0})
+    shown = []
+    monkeypatch.setattr(failure_notice, "_display",
+                        lambda title, text, application: shown.append((title, text, application)))
+    return shown
 
 
 class Event:
@@ -205,7 +216,7 @@ def test_rollback_without_reported_failure_keeps_generic_message():
 
 
 @pytest.mark.parametrize("mode", ["managed", "script"])
-def test_execute_payload_reports_failures_and_unsubscribes(execution_route, mode):
+def test_execute_payload_reports_failures_and_unsubscribes(execution_route, notices, mode):
     application = SimpleNamespace(FailuresProcessing=Event())
     doc = Document()
     doc.Application = application  # operations runtime path: no uiapp supplied
@@ -218,9 +229,12 @@ def test_execute_payload_reports_failures_and_unsubscribes(execution_route, mode
                                    "action": "rolled_back"}]
     assert result["owned_effects"] == "rolled_back" and not result["unsafe"] and doc.value == 0
     assert application.FailuresProcessing.handlers == []
+    [(title, text, shown_for)] = notices
+    assert title == "Revit MCP: 1 agent error rolled back"
+    assert text.endswith(CANT_SET + "  (ids 9)") and shown_for is application
 
 
-def test_execute_payload_raw_transaction_warning_commits_and_is_reported(execution_route):
+def test_execute_payload_raw_transaction_warning_commits_and_is_reported(execution_route, notices):
     application = SimpleNamespace(FailuresProcessing=Event())
     uiapp = SimpleNamespace(Application=application)
     execution_route.DB = FailureDB(application, [Message("Warning", OVERLAP, [1, 2])])
@@ -229,6 +243,7 @@ def test_execute_payload_raw_transaction_warning_commits_and_is_reported(executi
     assert status == 200, result
     assert [item["action"] for item in result["failures"]] == ["kept"]
     assert application.FailuresProcessing.handlers == []
+    assert notices == []  # Revit shows kept warnings itself
 
 
 def test_success_formatting_shows_failures_only_when_present():

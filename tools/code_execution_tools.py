@@ -156,6 +156,7 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         an owned scope raises with the failure text and a raw Commit() returns
         RolledBack. Warnings commit and stay in the model (action 'kept') and
         Revit shows its non-modal warning. No failure resolutions are applied.
+        Rolled-back errors also appear to the user in a small non-modal box.
 
         For UI operations that cannot run inside a transaction, such as switching
         the active view (requires allow_ui_change=True):

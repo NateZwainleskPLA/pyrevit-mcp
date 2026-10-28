@@ -9,6 +9,7 @@ from .execution_output import (execute_script, text_type, string_types,
 from .execution_helpers import RevitHelpers, build_hints
 from .execution_context import ExecutionContext
 from .failure_capture import FailureCapture
+from .failure_notice import notify_rolled_back
 from .execution_revit import ScopedRevit
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=Non
         # Capture/compile may fail before the runner starts. No scope exists then,
         # but close still verifies the selected document's postcondition.
         execution.close()
+    notify_rolled_back(capture.failures, capture.application)
     summary = execution.summary()
     summary["cleanup_errors"] = result.get("cleanup_errors", []) + summary["cleanup_errors"]
     result.update(summary)
