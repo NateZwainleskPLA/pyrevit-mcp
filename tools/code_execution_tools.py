@@ -31,9 +31,10 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
 
         With UI permission, use uiapp.OpenAndActivateDocument(path) and retain
         its returned UIDocument. execution.rollback_scope(new_doc, name), DB,
-        System, conversion helpers, bounded stdout/stderr and diagnostics match
-        execute_revit_code. opened_documents contains fresh registry descriptors
-        for documents still open; refresh target documents for client handles.
+        System, conversion helpers, bounded stdout/stderr, Revit failure
+        handling (failures) and diagnostics match execute_revit_code.
+        opened_documents contains fresh registry descriptors for documents
+        still open; refresh target documents for client handles.
 
         Only owned scopes are cleaned. Raw/external effects may remain unknown;
         unsafe postconditions block all subsequent mutations in this process.
@@ -148,6 +149,13 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         processing and cleanup errors are reported as unverified. script_name is
         a diagnostic basename, never a server-side file path. Use IronPython 2.7
         syntax; no f-strings. Imports of json shadow the local adapter: use to_json.
+
+        Revit failures never open a blocking dialog during the call. Each is
+        listed in failures: severity, description, element_ids, transaction
+        and action. An error rolls its transaction back (action 'rolled_back'):
+        an owned scope raises with the failure text and a raw Commit() returns
+        RolledBack. Warnings commit and stay in the model (action 'kept') and
+        Revit shows its non-modal warning. No failure resolutions are applied.
 
         For UI operations that cannot run inside a transaction, such as switching
         the active view (requires allow_ui_change=True):

@@ -82,6 +82,8 @@ def _format_success_value(value, response):
         "effects", "operation_id", "state", "partial_output", "traceback",
     }
     metadata = {key: val for key, val in response.items() if key in metadata_fields}
+    if response.get("failures"):  # kept warnings or raw rollbacks the script outlived
+        metadata["failures"] = response["failures"]
     text = str(value)
     if metadata:
         text += "\n\n=== RESPONSE METADATA ===\n" + json.dumps(
