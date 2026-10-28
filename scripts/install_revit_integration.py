@@ -3,6 +3,7 @@
 The existing extension stays enabled. Other Revit years execute its exact
 backed-up startup; selected years retain its pre-registration guards and then
 load this checkout. No models, pyRevit binaries or add-in manifests are changed.
+Optionally, the Codex and Claude Code revit-mcp-python clients are pointed at it.
 """
 import argparse
 import ast
@@ -25,17 +26,46 @@ def replace_file(path, data):
     staging.replace(path)
 
 
+CLIENT = "revit-mcp-python"
+
+
+def claude_entry(path, name):
+    return (json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}).get(name)
+
+
+def swap_claude_entry(path, name, expected, entry):
+    """Re-read Claude Code's config and replace only one user-scope MCP entry.
+
+    Claude Code rewrites the rest of this file constantly, so the file is never
+    backed up or restored whole. The entry must still equal `expected`.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    servers = data.setdefault("mcpServers", {})
+    if servers.get(name) != expected:
+        raise RuntimeError("Claude Code entry changed since installation; refusing to overwrite: " + name)
+    servers[name] = entry
+    # Claude Code's own layout: two-space indent, raw Unicode, no final newline.
+    replace_file(path, json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
+
+
 def restore(case):
     manifest = json.loads((case / "installation.json").read_text())
     for item in manifest["changed_files"]:
         path = Path(item["path"])
         if digest(path.read_bytes()) != item["installed_sha256"]:
             raise RuntimeError("Changed since installation; refusing to overwrite: " + str(path))
+    entries = manifest.get("changed_entries", [])
+    for item in entries:
+        if claude_entry(Path(item["path"]), item["name"]) != item["installed"]:
+            raise RuntimeError("Claude Code entry changed since installation; refusing to overwrite: "
+                               + item["name"])
     for item in manifest["changed_files"]:
         data = (case / item["backup"]).read_bytes()
         if digest(data) != item["original_sha256"]:
             raise RuntimeError("Backup checksum mismatch")
         replace_file(Path(item["path"]), data)
+    for item in entries:
+        swap_claude_entry(Path(item["path"]), item["name"], item["installed"], item["original"])
     print("Restored backed-up installation files; restart Revit/client to load them.")
     if manifest.get("previous_integration_sha"):
         print("Source checkout was not reverted. Restore source commit " +
@@ -110,12 +140,26 @@ def install(args):
     python = source / ".venv" / "Scripts" / "python.exe"
     if not python.is_file():
         raise RuntimeError("Missing integration client virtual environment")
+    state = args.backup_root.resolve() / "target-directory.sqlite3"
+    entries = []
+    if args.claude_config:
+        config = args.claude_config.resolve()
+        original = claude_entry(config, CLIENT)
+        if original is None:
+            raise RuntimeError("Existing Claude Code revit-mcp-python entry not found")
+        # The installer owns REVIT_TARGET_STATE. Any other setting, such as a
+        # per-version REVIT_PORT, needs a human decision, as for Codex.
+        if original.get("type", "stdio") != "stdio" or set(original.get("env") or {}) - {"REVIT_TARGET_STATE"}:
+            raise RuntimeError("Existing Claude Code client entry needs explicit reconciliation")
+        installed = dict(original, command=str(python), args=[str(source / "main.py")],
+                         env={"REVIT_TARGET_STATE": str(state)})
+        entries.append(dict(path=str(config), name=CLIENT, original=original, installed=installed))
     case = args.backup_root.resolve() / datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     case.mkdir(parents=True, exist_ok=False)
     (case / "legacy-startup.py").write_bytes(legacy)
     (case / "local-guards.py").write_bytes(legacy.split(marker, 1)[0])
     manifest = {"source": str(source), "integration_sha": sha, "versions": args.versions,
-                "backup_directory": str(case), "changed_files": []}
+                "backup_directory": str(case), "changed_files": [], "changed_entries": entries}
     settings = {"source": str(source), "legacy": str(case / "legacy-startup.py"),
                 "guards": str(case / "local-guards.py"), "case": str(case),
                 "sha": sha, "versions": args.versions}
@@ -177,7 +221,6 @@ else:
         section = match.group()
         section = re.sub(r"(?m)^command\s*=.*$", lambda _: "command = " + json.dumps(str(python)), section)
         section = re.sub(r"(?m)^args\s*=.*$", lambda _: "args = " + json.dumps([str(source / "main.py")]), section)
-        state = case.parent / "target-directory.sqlite3"
         section = section.rstrip() + "\n" + "env = { REVIT_TARGET_STATE = " + json.dumps(str(state)) + " }\n\n"
         updated = (text[:match.start()] + section + text[match.end():]).encode("utf-8")
         tomllib.loads(updated.decode("utf-8"))
@@ -192,6 +235,8 @@ else:
         for path, original, updated, backup in changes:
             replace_file(path, updated)
             changed.append((path, original))
+        for item in entries:
+            swap_claude_entry(Path(item["path"]), item["name"], item["original"], item["installed"])
     except BaseException:
         for path, original in reversed(changed):
             replace_file(path, original)
@@ -206,6 +251,8 @@ def main():
     parser.add_argument("--backup-root", type=Path)
     parser.add_argument("--versions", nargs="+", default=["2024", "2025", "2026"])
     parser.add_argument("--codex-config", type=Path)
+    parser.add_argument("--claude-config", type=Path,
+                        help="Claude Code user config (~/.claude.json); only its revit-mcp-python entry changes")
     parser.add_argument("--restore", type=Path)
     parser.add_argument("--update", type=Path, help="Existing installation directory to update, preserving local setup")
     args = parser.parse_args()
