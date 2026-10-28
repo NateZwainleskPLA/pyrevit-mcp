@@ -99,9 +99,12 @@ failure rolled back names the failure text in its cleanup error.
 Revit's mini-warning can only show registered definitions, which have fixed text
 and can be created only at startup. So rolled-back errors are shown to the user
 in a look-alike box instead (`failure_notice.py`). It is a non-activating WPF
-tool window owned by Revit, stacked just above where Revit pins its
-mini-warning. Errors collect newest first, with time, transaction, text and
-element IDs, until the user closes it. Showing it never affects the call.
+tool window owned by Revit, opened in the Revit window's lower right with room
+left below for Revit's mini-warning. Revit puts its own box in the monitor's
+corner instead, so the two stack only when Revit fills the screen. Neither
+follows the window once shown. Errors collect newest first, with time,
+transaction, text and element IDs, until the user closes it. Showing it never
+affects the call.
 
 Managed mode opens one owned transaction on the supplied document. Additional
 helper scopes are rejected. Compile/capture failure or cancellation before Start

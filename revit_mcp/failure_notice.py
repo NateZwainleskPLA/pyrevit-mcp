@@ -99,7 +99,11 @@ def _create(application):
 
 
 def _place_above_mini_warning(window, application, owner):
-    """Revit pins its mini-warning 5 px inside the main window's lower right."""
+    """Lower right of the Revit window, leaving room for Revit's mini-warning.
+
+    Revit puts its mini-warning in the monitor's corner, not the window's, so
+    the two line up only when Revit fills the screen.
+    """
     from System.Windows import WindowStartupLocation
     from Autodesk.Revit.UI import UIApplication
     extents = UIApplication(application).MainWindowExtents
