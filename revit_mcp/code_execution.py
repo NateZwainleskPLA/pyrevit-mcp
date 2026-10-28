@@ -8,6 +8,8 @@ from .execution_output import (execute_script, text_type, string_types,
                                validate_output_limit, DEFAULT_OUTPUT_LIMIT_CHARS)
 from .execution_helpers import RevitHelpers, build_hints
 from .execution_context import ExecutionContext
+from .failure_capture import FailureCapture
+from .failure_notice import notify_rolled_back
 from .execution_revit import ScopedRevit
 
 logger = logging.getLogger(__name__)
@@ -60,17 +62,23 @@ def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=Non
     import System
     namespace.update(RevitHelpers(DB, System).namespace())
     document_provider = (lambda: tuple(application.Documents)) if application_scope else None
+    # The operations runtime supplies no uiapp; the document knows its Application.
+    capture = FailureCapture(DB, application if application is not None
+                             else getattr(doc, "Application", None))
     execution = ExecutionContext(DB, doc, transaction_mode, cancellation_check,
-                                 document_provider=document_provider)
+                                 document_provider=document_provider, failures=capture.failures)
     namespace["execution"] = execution
-    result = execute_script(code, namespace, script_name, runner=execution.run,
-                            output_limit_chars=output_limit_chars)
-    # Capture/compile may fail before the runner starts. No scope exists then,
-    # but close still verifies the selected document's postcondition.
-    execution.close()
+    with capture:
+        result = execute_script(code, namespace, script_name, runner=execution.run,
+                                output_limit_chars=output_limit_chars)
+        # Capture/compile may fail before the runner starts. No scope exists then,
+        # but close still verifies the selected document's postcondition.
+        execution.close()
+    notify_rolled_back(capture.failures, capture.application)
     summary = execution.summary()
     summary["cleanup_errors"] = result.get("cleanup_errors", []) + summary["cleanup_errors"]
     result.update(summary)
+    result["failures"] = list(capture.failures)
     if result["unsafe"] and result["status"] == "success":
         result.update({"status": "error", "error_type": "UnsafeDocumentError",
                        "error": "Document postcondition is unsafe", "partial_output": result["output"]})

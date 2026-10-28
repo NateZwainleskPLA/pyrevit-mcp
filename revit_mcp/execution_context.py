@@ -66,13 +66,14 @@ class OwnedScope(object):
         self.context._unwind_children(self)
         self.context._finish(self, rollback=error_type is not None or self.kind == "rollback")
         if error_type is None and len(self.context.cleanup_errors) > before:
-            raise TransactionScopeError("Owned scope did not finish cleanly: {0}".format(self.name))
+            details = "; ".join(item["error"] for item in self.context.cleanup_errors[before:])
+            raise TransactionScopeError("Owned scope did not finish cleanly: {0}: {1}".format(self.name, details))
         return False
 
 
 class ExecutionContext(object):
     def __init__(self, db, selected_document, transaction_mode="script", cancellation_check=None,
-                 document_provider=None):
+                 document_provider=None, failures=None):
         if transaction_mode not in ("script", "managed"):
             raise ValueError("transaction_mode must be 'script' or 'managed'")
         self.db = db
@@ -82,6 +83,8 @@ class ExecutionContext(object):
         # Optional API-context callback for application execution only. It
         # enumerates document state, never foreign transaction objects.
         self.document_provider = document_provider
+        # Shared with FailureCapture; names the failure behind a rolled-back commit.
+        self.failures = failures if failures is not None else []
         self.scopes = []
         self.active = []
         self.documents = []
@@ -184,6 +187,7 @@ class ExecutionContext(object):
             if any(self._descends_from(child, scope) for child in self.active if child is not scope):
                 raise TransactionScopeError("An owned child scope is unresolved; parent cannot finish")
             if status == ts.Started:
+                reported = len(self.failures)
                 action = scope.native.RollBack if rollback else scope.native.Commit
                 returned = action()
                 scope.receipt["returned_status"] = safe_text(returned)
@@ -196,8 +200,12 @@ class ExecutionContext(object):
                 if status != expected:
                     # A failed Commit can finish RolledBack; record it, but the
                     # requested edit still failed. Started is unwound by close.
-                    self._error(scope, "rollback" if rollback else "commit",
-                                "Expected {0}, received {1}".format(expected, status),
+                    message = "Expected {0}, received {1}".format(expected, status)
+                    cause = "; ".join(item["description"] for item in self.failures[reported:]
+                                      if item.get("action") == "rolled_back")
+                    if cause and not rollback:
+                        message = "Revit failure rolled back the commit: " + cause
+                    self._error(scope, "rollback" if rollback else "commit", message,
                                 unsafe=status not in (ts.Committed, ts.RolledBack))
             if status == ts.Committed:
                 scope.receipt["effect"] = "committed"

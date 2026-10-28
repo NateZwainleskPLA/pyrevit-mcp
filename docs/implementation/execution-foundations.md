@@ -87,6 +87,25 @@ in `execution_context.py` provides:
 - `summary()`: primitive `effects`, `owned_effects`, `unsafe`,
   `transaction_receipts`, `checks`, and `cleanup_errors`.
 
+`execute_payload` subscribes `Application.FailuresProcessing` for the length of
+one call (`failure_capture.py`), so raw script transactions are covered too.
+Every failure message goes into `failures` with its severity, description,
+failing element IDs, transaction name and action. Errors roll back with
+clear-after-rollback, and no dialog appears (`rolled_back`). Warnings commit and
+stay in `doc.GetWarnings()`, shown as Revit's non-modal mini-warning (`kept`).
+`DeleteWarning` and failure resolutions are not used. An owned commit that a
+failure rolled back names the failure text in its cleanup error.
+
+Revit's mini-warning can only show registered definitions, which have fixed text
+and can be created only at startup. So rolled-back errors are shown to the user
+in a look-alike box instead (`failure_notice.py`). It is a non-activating WPF
+tool window owned by Revit, opened in the Revit window's lower right with room
+left below for Revit's mini-warning. Revit puts its own box in the monitor's
+corner instead, so the two stack only when Revit fills the screen. Neither
+follows the window once shown. Errors collect newest first, with time,
+transaction, text and element IDs, until the user closes it. Showing it never
+affects the call.
+
 Managed mode opens one owned transaction on the supplied document. Additional
 helper scopes are rejected. Compile/capture failure or cancellation before Start
 has no effects. An exception after Start unwinds even when __enter__ raised.
