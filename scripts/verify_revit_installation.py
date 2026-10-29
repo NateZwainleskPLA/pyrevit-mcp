@@ -72,7 +72,7 @@ async def verify(case, output, versions=None, api_context=False):
             initialized = await session.initialize()
             tools = await session.list_tools()
             targets = await session.call_tool("list_revit_targets", {})
-            data = targets.structuredContent
+            data = targets.structured_content
             if data is None:
                 for item in targets.content:
                     if item.type == "text":
@@ -82,12 +82,12 @@ async def verify(case, output, versions=None, api_context=False):
                                 data = candidate
                         except ValueError:
                             pass
-            if targets.isError or data is None:
+            if targets.is_error or data is None:
                 raise RuntimeError("MCP target discovery failed: " + str(targets.content))
             observed = sorted(t["revit_version"] for t in data["targets"])
             if not all(version in observed for version in versions):
                 raise RuntimeError("MCP did not discover the expected native versions")
-            report["mcp"] = {"server": initialized.serverInfo.name,
+            report["mcp"] = {"server": initialized.server_info.name,
                              "tool_count": len(tools.tools), "versions": observed,
                              "target_handles": [t["target"] for t in data["targets"]]}
     output.write_text(json.dumps(report, indent=2), encoding="utf-8")

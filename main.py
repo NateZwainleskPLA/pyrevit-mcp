@@ -3,7 +3,7 @@ import os
 import sys
 import json
 import anyio
-from mcp.server.fastmcp import FastMCP, Image, Context
+from mcp.server.mcpserver import MCPServer, Image, Context
 from mcp.server.transport_security import TransportSecuritySettings
 import base64
 from typing import Optional, Dict, Any, Union
@@ -16,21 +16,22 @@ from revit_mcp.identity import IdentityError
 from revit_mcp.routing_policy import RoutingPolicyError
 
 # Create a generic MCP server for interacting with Revit
-# Use stateless_http=True and json_response=True for better compatibility
-mcp = FastMCP(
-    "Revit MCP Server",
-    host="127.0.0.1",
-    port=8000,
-    stateless_http=True,
-    json_response=True,
-    # The HTTP transports reach execute_code. Reject DNS-rebinding (foreign Host)
-    # and cross-site browser requests (foreign Origin); non-browser clients send no Origin.
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
-        allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
-    ),
+mcp = MCPServer("Revit MCP Server")
+
+# The SDK takes HTTP settings per transport entry point, not on the server.
+HOST = "127.0.0.1"
+PORT = 8000
+# The HTTP transports reach execute_code. Reject DNS-rebinding (foreign Host)
+# and cross-site browser requests (foreign Origin); non-browser clients send no Origin.
+TRANSPORT_SECURITY = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
+    allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
 )
+# Use stateless_http=True and json_response=True for better compatibility
+STREAMABLE_HTTP_OPTIONS = dict(stateless_http=True, json_response=True,
+                               transport_security=TRANSPORT_SECURITY)
+SSE_OPTIONS = dict(transport_security=TRANSPORT_SECURITY)
 
 target_directory = TargetDirectory(os.environ.get("REVIT_TARGET_STATE"))
 target_discovery = TargetDiscovery(target_directory)
@@ -96,11 +97,11 @@ async def run_combined_async():
 
     # Get the streamable-http app first - it has the proper lifespan
     # that initializes the session manager's task group
-    http_app = mcp.streamable_http_app()
+    http_app = mcp.streamable_http_app(**STREAMABLE_HTTP_OPTIONS)
 
     # Get SSE routes (SSE doesn't need special lifespan - it creates
     # task groups per-request in connect_sse())
-    sse_app = mcp.sse_app()
+    sse_app = mcp.sse_app(**SSE_OPTIONS)
 
     # Add SSE routes to the http app (preserving its lifespan)
     for route in sse_app.routes:
@@ -108,8 +109,8 @@ async def run_combined_async():
 
     config = uvicorn.Config(
         http_app,
-        host=mcp.settings.host,
-        port=mcp.settings.port,
+        host=HOST,
+        port=PORT,
         log_level=mcp.settings.log_level.lower(),
     )
     server = uvicorn.Server(config)
@@ -117,16 +118,16 @@ async def run_combined_async():
 
 
 if __name__ == "__main__":
-    transport = "stdio"
+    transport, options = "stdio", {}
 
     if "--sse" in sys.argv:
-        transport = "sse"
+        transport, options = "sse", dict(SSE_OPTIONS, host=HOST, port=PORT)
     elif "--http" in sys.argv or "--streamable-http" in sys.argv:
-        transport = "streamable-http"
+        transport, options = "streamable-http", dict(STREAMABLE_HTTP_OPTIONS, host=HOST, port=PORT)
     elif "--combined" in sys.argv:
         # Run both SSE and streamable-http transports simultaneously
         print("Starting combined server with SSE (/sse, /messages/) and streamable-http (/mcp) endpoints...")
         anyio.run(run_combined_async)
         sys.exit(0)
 
-    mcp.run(transport=transport)
+    mcp.run(transport=transport, **options)

@@ -67,7 +67,7 @@ They never conflict because they serve different roles, speak different protocol
 
 1.  **MCP Server (`main.py`)**:
 
-- Built with FastMCP
+- Built with `MCPServer` from the MCP Python SDK 2.x
 - Handles HTTP communication with Revit Routes API
 - Registers tools from modular tool system
 - Provides helper functions for GET/POST/Image requests
@@ -401,7 +401,7 @@ Create the corresponding tools for the MCP server in the `tools/` directory (e.g
 # -*- coding: utf-8 -*-
 """Your tools for the MCP server."""
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from .utils import format_response
 
 def register_your_tools(mcp, revit_get, revit_post, revit_image=None):

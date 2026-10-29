@@ -20,7 +20,7 @@ def pytest_collection_modifyitems(items):
 
 
 class MockMCP:
-    """Minimal stand-in for FastMCP that captures tool registrations."""
+    """Minimal stand-in for MCPServer that captures tool registrations."""
 
     def __init__(self):
         self.tools = {}

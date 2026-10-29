@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from mcp.server.fastmcp import Image
+from mcp.server.mcpserver import Image
 
 import main
 from tools.code_execution_tools import register_code_execution_tools
