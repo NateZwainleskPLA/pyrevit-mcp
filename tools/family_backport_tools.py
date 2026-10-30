@@ -2,7 +2,8 @@
 """Agent-oriented family evidence tools; reconstruction uses focused Revit code."""
 import json
 from typing import Any, Dict, Optional
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
 from revit_mcp.family_backport_contract import compatibility_report, compare_manifests
 
 
@@ -37,7 +38,11 @@ def register_family_backport_tools(mcp, revit_post):
         Runs outside Revit. Blockers are unresolved preservation work, not a
         license to omit features. Revit 2022 remains research-only.
         """
-        return json.dumps(compatibility_report(manifest, target_version), indent=2)
+        try:
+            return json.dumps(compatibility_report(manifest, target_version), indent=2)
+        except Exception as error:
+            # MCPServer hides other exceptions' text from the client; the agent needs it.
+            raise ToolError(str(error) or type(error).__name__) from error
 
     @mcp.tool()
     async def compare_family_backport(source_manifest: Dict[str, Any], target_manifest: Dict[str, Any],
@@ -48,4 +53,8 @@ def register_family_backport_tools(mcp, revit_post):
         prove arbitrary flex, host, cut, connector or nested-family equivalence.
         Unsupported content remains unverified even if sampled evidence matches.
         """
-        return json.dumps(compare_manifests(source_manifest, target_manifest, tolerance), indent=2)
+        try:
+            return json.dumps(compare_manifests(source_manifest, target_manifest, tolerance), indent=2)
+        except Exception as error:
+            # MCPServer hides other exceptions' text from the client; the agent needs it.
+            raise ToolError(str(error) or type(error).__name__) from error

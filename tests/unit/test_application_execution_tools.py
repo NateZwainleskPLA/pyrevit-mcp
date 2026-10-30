@@ -138,10 +138,10 @@ def test_cli_requires_explicit_single_scope_and_rejects_application_managed_mode
 
 
 async def test_native_mcp_registration_exposes_target_only_application_tools():
-    from mcp.server.fastmcp import FastMCP
-    mcp = FastMCP("application-contract-test")
+    from mcp.server.mcpserver import MCPServer
+    mcp = MCPServer("application-contract-test")
     register_code_execution_tools(mcp, AsyncMock(), AsyncMock())
-    schemas = {tool.name: tool.inputSchema for tool in await mcp.list_tools()}
+    schemas = {tool.name: tool.input_schema for tool in await mcp.list_tools()}
     for name in ("execute_revit_application_code", "execute_revit_application_script_file"):
         assert "target" in schemas[name]["required"]
         assert "document" not in schemas[name]["properties"]

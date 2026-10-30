@@ -18,7 +18,7 @@ This implementation uses a **modular architecture** that separates concerns and 
 ### **Project Structure**
 ```
 revit-mcp-python/
-├── main.py                                    # MCP Server (FastMCP implementation)
+├── main.py                                    # MCP Server (MCPServer implementation)
 ├── tools/                                     # MCP Tool definitions (organized by functionality)
 │   ├── __init__.py                           # Tool registration system
 │   ├── utils.py                              # Utility functions for response formatting
@@ -47,7 +47,7 @@ revit-mcp-python/
 ### **Key Architecture Components**
 
 1. **MCP Server (`main.py`)**: 
-   - Built with FastMCP
+   - Built with MCPServer (MCP Python SDK 2.x)
    - Handles HTTP communication with Revit Routes API
    - Registers tools from modular tool system
    - Provides helper functions for GET/POST/Image requests
@@ -405,7 +405,7 @@ This repo is aimed at:
 
 It contains:
 - A complete modular Routes implementation for pyRevit
-- A FastMCP server script to connect to any MCP-compatible client
+- An MCPServer script to connect to any MCP-compatible client
 - Several categorized tools to get you started right away
 - A modular architecture that makes adding new functionality straightforward
 
@@ -574,7 +574,7 @@ Next, create the corresponding tools for the MCP server. This is what the LLM wi
 # -*- coding: utf-8 -*-
 """Your tools for the MCP server."""
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from .utils import format_response
 
 def register_your_tools(mcp, revit_get, revit_post, revit_image=None):

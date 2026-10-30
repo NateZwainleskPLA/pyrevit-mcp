@@ -5,7 +5,7 @@ description = "MCP server for Revit"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp[cli]>=1.30.0,<2",
+    "mcp[cli]>=2.3.0,<3",
     "httpx>=0.28.1,<1",
 ]
 

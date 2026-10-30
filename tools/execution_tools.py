@@ -1,5 +1,5 @@
 """Opt-in recoverable tools using the routing owner's TargetRouter interface."""
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 
 
 def register_execution_tools(mcp, router):

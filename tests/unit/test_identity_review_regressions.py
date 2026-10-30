@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from revit_mcp.identity import IdentityError, validate_snapshot
 import revit_mcp.target_runtime as runtime
@@ -360,9 +361,9 @@ async def test_retirement_during_metadata_tool_read_is_a_typed_error(mock_mcp):
     async def revalidate(target):
         directory.observe(metadata())  # port has a new owner between handshake/list
     register_target_tools(mock_mcp, directory, SimpleNamespace(revalidate=revalidate))
-    with pytest.raises(IdentityError) as error:
+    with pytest.raises(ToolError, match="Target retired while reading metadata") as error:
         await mock_mcp.tools["get_revit_target_metadata"](handle, ctx=None)
-    assert error.value.code == "expired_target"
+    assert error.value.__cause__.code == "expired_target"
 
 
 def test_pruning_deletes_only_proven_stale_owned_files(tmp_path):

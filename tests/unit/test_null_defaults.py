@@ -3,7 +3,7 @@
 
 Some MCP clients send "arg": null for an optional argument they leave unset.
 Annotated `str = None`, the schema advertises "default": null on a string-only
-field and FastMCP rejects the call before the tool runs.
+field and MCPServer rejects the call before the tool runs.
 """
 from main import mcp
 
@@ -16,8 +16,8 @@ async def test_null_default_args_accept_explicit_null():
     rejected = []
     checked = 0
     for tool in await mcp.list_tools():
-        props = tool.inputSchema.get("properties", {})
-        required = tool.inputSchema.get("required", [])
+        props = tool.input_schema.get("properties", {})
+        required = tool.input_schema.get("required", [])
         arg_model = mcp._tool_manager.get_tool(tool.name).fn_metadata.arg_model
         for name, prop in props.items():
             if "default" not in prop or prop["default"] is not None:
