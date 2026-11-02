@@ -21,3 +21,20 @@ async def test_tool_error_text_reaches_client(mode, name, arguments, reason):
         result = await client.call_tool(name, arguments)
     assert result.is_error
     assert result.content[0].text == "Error executing tool {}: {}".format(name, reason)
+
+
+@pytest.mark.parametrize("name, arguments, text", [
+    ("execute_revit_code", {"target": "nope", "document": "d1", "code": "pass"},
+     "=== ERROR DETAILS ===\nStatus: error\nError: target handle is unknown in this namespace\n"),
+    ("execute_revit_script_file", {"target": "r1", "document": "d1", "file_path": "missing-file.py"},
+     "Error reading/executing local script: "),
+    ("execute_revit_application_code", {"target": "r1", "code": "pass", "transaction_mode": "managed"},
+     "Error during application code execution: Application execution requires transaction_mode='script'"),
+    ("execute_revit_application_script_file", {"target": "r1", "file_path": "missing-file.py"},
+     "Error reading/executing local application script: "),
+])
+async def test_execute_tool_failures_are_tool_errors(name, arguments, text):
+    async with Client(mcp, mode="auto") as client:
+        result = await client.call_tool(name, arguments)
+    assert result.is_error
+    assert result.content[0].text.startswith("Error executing tool {}: {}".format(name, text))

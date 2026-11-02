@@ -8,7 +8,7 @@ from .execution_output import (execute_script, text_type, string_types,
                                validate_output_limit, DEFAULT_OUTPUT_LIMIT_CHARS)
 from .execution_helpers import RevitHelpers, build_hints
 from .execution_context import ExecutionContext
-from .failure_capture import FailureCapture
+from .failure_capture import FailureCapture, rolled_back_error
 from .dialog_capture import DialogCapture, dialog_hints, ui_application
 from .failure_notice import notify_rolled_back
 from .execution_revit import ScopedRevit
@@ -84,13 +84,18 @@ def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=Non
     if result["unsafe"] and result["status"] == "success":
         result.update({"status": "error", "error_type": "UnsafeDocumentError",
                        "error": "Document postcondition is unsafe", "partial_output": result["output"]})
+    # A raw Commit() that Revit rolled back returns RolledBack without raising.
+    # The script's own error, if any, stays the reported one.
+    rollback = rolled_back_error(capture.failures)
+    if rollback and result["status"] == "success":
+        result.update({"status": "error", "error_type": "RevitFailure", "error": rollback,
+                       "partial_output": result["output"]})
     if result["status"] == "error":
         hints = (dialog_hints(capture.failures)
                  + build_hints(result.get("error_type", ""), result.get("error", "")))
         if hints:
             result["hints"] = hints
     result["description"] = description
-    result["code_executed" if result["status"] == "success" else "code_attempted"] = code
     return result, 200 if result["status"] == "success" else 500
 
 

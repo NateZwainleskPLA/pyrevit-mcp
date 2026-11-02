@@ -11,7 +11,10 @@ foundation does not claim the legacy route already meets the targeting contract.
 stdout and stderr in an outer finally, including SystemExit/KeyboardInterrupt.
 Output remains separate from stderr. Failures preserve `partial_output`,
 `error_type`, `traceback`, and `script_location` (filename/line/column). A supplied
-`script_name` contributes only its basename; it never reads a host file. Empty
+`script_name` contributes only its basename; it never reads a host file. The
+submitted source is registered in `linecache` under that basename for the call
+(mtime None, so `checkcache` keeps it), so the traceback prints each failing
+line; a previous entry under the same name is restored afterwards. Empty
 output remains an empty string. Capture read/close failures appear separately
 in `cleanup_errors` and do not mask the script exception. Execution must be
 serialized because Python streams belong to the engine.
@@ -94,7 +97,13 @@ failing element IDs, transaction name and action. Errors roll back with
 clear-after-rollback, and no dialog appears (`rolled_back`). Warnings commit and
 stay in `doc.GetWarnings()`, shown as Revit's non-modal mini-warning (`kept`).
 `DeleteWarning` and failure resolutions are not used. An owned commit that a
-failure rolled back names the failure text in its cleanup error.
+failure rolled back names the failure text in its cleanup error. A raw
+`Commit()` that Revit rolls back returns RolledBack without raising, so when
+the script otherwise succeeds, any `rolled_back` record ends the call as an
+error: `error_type` `RevitFailure`, a message naming each rolled-back
+transaction and the first failure's text, and `effects` as the receipts report
+them. A script's own error stays the reported one. Kept warnings and dialog
+records do not fail a call.
 
 Revit's mini-warning can only show registered definitions, which have fixed text
 and can be created only at startup. So rolled-back errors are shown to the user

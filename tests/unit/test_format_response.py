@@ -85,12 +85,32 @@ class TestErrorResponses:
             {
                 "status": "error",
                 "error": "fail",
-                "code_attempted": "print(1)",
                 "endpoint": "/test/",
             }
         )
-        assert "Code Attempted: print(1)" in result
         assert "Endpoint: /test/" in result
+        assert "ADDITIONAL RESPONSE DATA" not in result
+
+    def test_error_leaves_out_empty_fields_and_repeated_output(self):
+        result = format_response({
+            "status": "error", "error": "NameError: x", "traceback": "trace",
+            "checks": [], "cleanup_errors": [], "failures": [], "document_notes": [],
+            "output": "", "stderr": "", "partial_output": "", "hints": None, "output_capture": {},
+            "effects": "unknown", "output_truncated": False, "script_location": {"line": 3},
+        })
+        extra = result.split("=== ADDITIONAL RESPONSE DATA ===\n", 1)[1].splitlines()
+        assert extra == ["effects: unknown", "output_truncated: False",
+                         "script_location: {'line': 3}"]
+
+    def test_error_shows_partial_output_once(self):
+        result = format_response({"status": "error", "error": "boom",
+                                  "output": "step one", "partial_output": "step one"})
+        assert result.count("step one") == 1
+        assert "output: step one" in result and "partial_output" not in result
+
+    def test_error_keeps_partial_output_that_differs(self):
+        result = format_response({"status": "error", "error": "boom", "partial_output": "step one"})
+        assert "partial_output: step one" in result
 
     def test_error_message_fallback_when_no_error_key(self):
         # An error response carrying only "message" should surface it instead

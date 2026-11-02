@@ -194,8 +194,6 @@ class OperationStore(object):
                                 list(value.items())[:32]) if depth < 3 else {}
                 return value
             result = bounded(result)
-            result.pop("code_executed", None)
-            result.pop("code_attempted", None)
             result["receipt_truncated"] = True
             if len(json.dumps(result, ensure_ascii=True).encode("utf-8")) > self.max_receipt_bytes:
                 result = {"receipt_truncated": True, "error_type": safe_text(result.get("error_type", ""))[:32],

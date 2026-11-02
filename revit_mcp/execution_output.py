@@ -3,7 +3,9 @@
 
 Requires serialized execution in one IronPython engine: sys streams are global.
 """
+import linecache
 import os
+import re
 import sys
 import threading
 import traceback
@@ -161,6 +163,34 @@ def exception_details(error, exc_info, filename):
             "script_location": location}
 
 
+def _source_lines(source):
+    """Physical lines with their endings, as linecache stores them."""
+    lines, start = [], 0
+    for match in re.finditer(r"\r\n|\r|\n", source):
+        lines.append(source[start:match.end()])
+        start = match.end()
+    if start < len(source):
+        lines.append(source[start:])
+    return lines
+
+
+def _register_source(filename, code):
+    """Let tracebacks print the script's lines. Returns the entry to restore.
+
+    A None mtime keeps linecache.checkcache from evicting the entry, on 2.7 too.
+    """
+    previous = linecache.cache.get(filename)
+    linecache.cache[filename] = (len(code), None, _source_lines(code), filename)
+    return previous
+
+
+def _unregister_source(filename, previous):
+    if previous is None:
+        linecache.cache.pop(filename, None)
+    else:
+        linecache.cache[filename] = previous
+
+
 def execute_script(code, namespace, script_name="<revit-script>", buffer_factory=None,
                    runner=None, output_limit_chars=DEFAULT_OUTPUT_LIMIT_CHARS):
     """Execute code and always restore both streams, including BaseException.
@@ -175,6 +205,7 @@ def execute_script(code, namespace, script_name="<revit-script>", buffer_factory
     result = {"status": "success", "output": u"", "stderr": u"",
               "script_name": filename}
     cleanup_errors = []
+    previous_source = _register_source(filename, code)
     try:
         stdout = CaptureStream(buffer_factory, budget, "output")
         stderr = CaptureStream(buffer_factory, budget, "stderr")
@@ -191,6 +222,7 @@ def execute_script(code, namespace, script_name="<revit-script>", buffer_factory
         result.update(exception_details(error, sys.exc_info(), filename))
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
+        _unregister_source(filename, previous_source)
         for name, stream in (("output", stdout), ("stderr", stderr)):
             if stream is None:
                 continue

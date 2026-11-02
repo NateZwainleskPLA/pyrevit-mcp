@@ -94,3 +94,21 @@ class FailureCapture(object):
                 accessor.SetFailureHandlingOptions(options)
         except BaseException as error:
             self.failures.append({"action": "capture_error", "error": safe_text(error)})
+
+
+def rolled_back_error(failures):
+    """The error text for transactions Revit rolled back, or None if there were none."""
+    rolled_back = [item for item in failures if item.get("action") == "rolled_back"]
+    if not rolled_back:
+        return None
+    transactions = []
+    for item in rolled_back:
+        if item.get("transaction") not in transactions:
+            transactions.append(item.get("transaction"))
+    names = ", ".join(u"'{0}'".format(name) for name in transactions)
+    noun = "transaction" if len(transactions) == 1 else "transactions"
+    text = safe_text(rolled_back[0].get("description", "")).strip()
+    if text and text[-1] not in ".!?":
+        text += "."  # Revit's own texts often lack the period
+    return (u"Revit rolled back {0} {1} because of an error: {2} "
+            u"See failures for every message.").format(noun, names, text)
