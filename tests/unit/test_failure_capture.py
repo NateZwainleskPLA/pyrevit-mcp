@@ -261,7 +261,9 @@ def test_raw_commit_rolled_back_by_revit_fails_the_call(execution_route):
     assert status == 500
     assert result["status"] == "error" and result["error_type"] == "RevitFailure"
     assert result["error"] == ("Revit rolled back transaction 'Raw' because of an error: "
-                               + CANT_SET + ". See failures for every message.")
+                               + CANT_SET + ". The script kept running, and anything else it "
+                               "committed is still in the model; check the model before running "
+                               "it again. See failures for every message.")
     assert result["output"] == result["partial_output"] == "RolledBack\n"
     assert result["effects"] == "unknown"  # raw work: no owned receipt proves the effect
     assert [item["action"] for item in result["failures"]] == ["rolled_back"]

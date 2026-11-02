@@ -174,8 +174,10 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         and the call fails: an owned scope raises with the failure text, and a
         raw Commit() returns RolledBack, after which the call ends with
         error_type 'RevitFailure' naming the transaction and Revit's text.
-        Warnings commit and stay in the model (action 'kept') and Revit shows
-        its non-modal warning. No failure resolutions are applied.
+        The script's other commits stay in the model, so check it before
+        rerunning the script. Warnings commit and stay in the model (action
+        'kept') and Revit shows its non-modal warning. No failure resolutions
+        are applied.
         Rolled-back errors also appear to the user in a small non-modal box.
         A failed call is an MCP tool error; its traceback shows source lines.
 

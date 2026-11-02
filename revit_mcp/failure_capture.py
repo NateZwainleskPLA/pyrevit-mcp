@@ -110,5 +110,9 @@ def rolled_back_error(failures):
     text = safe_text(rolled_back[0].get("description", "")).strip()
     if text and text[-1] not in ".!?":
         text += "."  # Revit's own texts often lack the period
+    # Unlike a rolled-back run in pyRevit's agent host, the rest of the script's
+    # commits survive, so an agent rerunning the whole script would repeat them.
     return (u"Revit rolled back {0} {1} because of an error: {2} "
+            u"The script kept running, and anything else it committed is still in the model; "
+            u"check the model before running it again. "
             u"See failures for every message.").format(noun, names, text)

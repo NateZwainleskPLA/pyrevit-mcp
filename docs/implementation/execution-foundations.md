@@ -102,7 +102,9 @@ failure rolled back names the failure text in its cleanup error. A raw
 the script otherwise succeeds, any `rolled_back` record ends the call as an
 error: `error_type` `RevitFailure`, a message naming each rolled-back
 transaction and the first failure's text, and `effects` as the receipts report
-them. A script's own error stays the reported one. Kept warnings and dialog
+them. The message says the script's other commits stay in the model, so an
+agent checks it before rerunning the script; nothing rolls the whole call back.
+A script's own error stays the reported one. Kept warnings and dialog
 records do not fail a call.
 
 Revit's mini-warning can only show registered definitions, which have fixed text
