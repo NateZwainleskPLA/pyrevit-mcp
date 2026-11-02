@@ -3,6 +3,7 @@
 
 Requires serialized execution in one IronPython engine: sys streams are global.
 """
+import os
 import sys
 import threading
 import traceback
@@ -21,6 +22,17 @@ except NameError:
 
 
 DEFAULT_OUTPUT_LIMIT_CHARS = 1000000
+_CONNECTOR_DIR = os.path.normcase(os.path.dirname(os.path.abspath(__file__)))
+_STDLIB_DIR = os.path.normcase(os.path.dirname(os.path.abspath(os.__file__)))
+
+
+def script_frame(filename):
+    """False for this package and the standard library, so locations name script code."""
+    try:
+        folder = os.path.normcase(os.path.dirname(os.path.abspath(filename)))
+    except Exception:
+        return False
+    return folder != _CONNECTOR_DIR and not (folder + os.sep).startswith(_STDLIB_DIR + os.sep)
 
 
 def validate_output_limit(limit):
@@ -127,11 +139,19 @@ def exception_details(error, exc_info, filename):
         location["line"] = error.lineno
         location["column"] = error.offset
     else:
-        tb = exc_info[2]
+        # The innermost frame below the script names the real line when the
+        # script exec's a file of its own, e.g. exec(compile(open(p).read(), p, "exec")).
+        tb, entered, innermost = exc_info[2], False, None
         while tb is not None:
-            if tb.tb_frame.f_code.co_filename == filename:
+            frame_file = tb.tb_frame.f_code.co_filename
+            if frame_file == filename:
                 location["line"] = tb.tb_lineno
+                entered = True
+            if entered and script_frame(frame_file):
+                innermost = {"file": safe_text(frame_file), "line": tb.tb_lineno}
             tb = tb.tb_next
+        if innermost is not None and innermost != {"file": filename, "line": location["line"]}:
+            location["innermost"] = innermost
     try:
         trace = u"".join(traceback.format_exception(*exc_info))
     except BaseException:

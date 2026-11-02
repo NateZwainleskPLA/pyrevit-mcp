@@ -9,6 +9,7 @@ from .execution_output import (execute_script, text_type, string_types,
 from .execution_helpers import RevitHelpers, build_hints
 from .execution_context import ExecutionContext
 from .failure_capture import FailureCapture
+from .dialog_capture import DialogCapture, dialog_hints, ui_application
 from .failure_notice import notify_rolled_back
 from .execution_revit import ScopedRevit
 
@@ -65,10 +66,11 @@ def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=Non
     # The operations runtime supplies no uiapp; the document knows its Application.
     capture = FailureCapture(DB, application if application is not None
                              else getattr(doc, "Application", None))
+    dialogs = DialogCapture(ui_application(uiapp, capture.application), capture.failures)
     execution = ExecutionContext(DB, doc, transaction_mode, cancellation_check,
                                  document_provider=document_provider, failures=capture.failures)
     namespace["execution"] = execution
-    with capture:
+    with capture, dialogs:
         result = execute_script(code, namespace, script_name, runner=execution.run,
                                 output_limit_chars=output_limit_chars)
         # Capture/compile may fail before the runner starts. No scope exists then,
@@ -83,7 +85,8 @@ def execute_payload(data, doc, uidoc, cancellation_check=None, revit_context=Non
         result.update({"status": "error", "error_type": "UnsafeDocumentError",
                        "error": "Document postcondition is unsafe", "partial_output": result["output"]})
     if result["status"] == "error":
-        hints = build_hints(result.get("error_type", ""), result.get("error", ""))
+        hints = (dialog_hints(capture.failures)
+                 + build_hints(result.get("error_type", ""), result.get("error", "")))
         if hints:
             result["hints"] = hints
     result["description"] = description

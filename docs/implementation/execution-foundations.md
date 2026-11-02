@@ -104,6 +104,33 @@ left below for Revit's mini-warning. It stays put if the window moves later.
 Errors collect newest first, with time, transaction, text and element IDs,
 until the user closes it. Showing it never affects the call.
 
+Some modal dialogs aren't failures, so FailuresProcessing never sees them.
+`execute_payload` also subscribes `UIApplication.DialogBoxShowing` for the call
+(`dialog_capture.py`). The operations runtime supplies no uiapp, so it builds a
+`UIApplication` over the document's Application. Only exact dialog IDs proven
+live are answered. Today that is `Dialog_Revit_PasteSimilarSymbolsPaste`,
+Revit's Duplicate Types dialog. `CopyElements` shows it when the destination has
+same-named types with different settings, and without a handler it blocks the
+call. It is answered Cancel (IDCANCEL), so the copy raises
+`OperationCanceledException` ("User cancelled the operation."). OK would quietly
+keep the destination's types, and the script should choose that itself through
+`CopyPasteOptions.SetDuplicateTypeNamesHandler`. With a handler set, Revit raises
+no dialog event at all. This was proven in Revit 2025.5 (25.5.0.57). The ID is
+unverified on 2024 and 2026.
+
+Each dialog is recorded in `failures` with its `dialog_id`, `action`
+(`cancelled`, `answer_rejected` or `left_for_user`) and `location`: the innermost
+script frame (file, line, function, code) when the event fired. IronPython
+exposes the stack there, through `exec`'d files too, because the event fires
+synchronously inside the script's Revit call. A cancelled Duplicate Types dialog
+also adds a hint naming that line. A script that catches the exception still gets
+the record. Unknown dialogs are left for the user, as before.
+
+`script_location` keeps the line in the submitted code. When the error was raised
+deeper in another script file (a submitted script that exec's a file),
+`script_location.innermost` gives that file and line. Connector and standard
+library frames are skipped.
+
 Managed mode opens one owned transaction on the supplied document. Additional
 helper scopes are rejected. Compile/capture failure or cancellation before Start
 has no effects. An exception after Start unwinds even when __enter__ raised.

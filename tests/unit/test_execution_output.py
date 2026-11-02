@@ -37,6 +37,20 @@ def test_partial_output_and_script_line(failure):
     assert (sys.stdout, sys.stderr) == streams
 
 
+def test_exec_file_error_names_the_file_line(tmp_path):
+    inner = tmp_path / "build.py"
+    inner.write_text("x = 1\nraise ValueError('deep')\n")
+    code = "p = {0!r}\nexec(compile(open(p).read(), p, 'exec'))".format(str(inner))
+    result = execute_script(code, {}, "runner.py")
+    assert result["script_location"]["line"] == 2
+    assert result["script_location"]["innermost"] == {"file": str(inner), "line": 2}
+
+
+def test_stdlib_error_keeps_the_script_line():
+    result = execute_script("import json\njson.loads('{bad')", {}, "runner.py")
+    assert result["script_location"] == {"filename": "runner.py", "line": 2, "column": None}
+
+
 def test_syntax_error_location():
     result = execute_script("x =", {}, "bad.py")
     assert result["error_type"] == "SyntaxError"

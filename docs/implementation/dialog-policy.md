@@ -5,6 +5,8 @@ Optional dialog policy contract
 nothing; `startup.py` is unchanged. `DialogPolicy()` leaves every dialog alone.
 There are **no shipped supported Revit dialog cases**. The offline tests use
 synthetic IDs, builds and actions; they do not establish native support.
+The one dialog execute calls do answer today, Duplicate Types, is handled
+separately by `dialog_capture.py` (see `execution-foundations.md`).
 
 Upstream review
 ---------------

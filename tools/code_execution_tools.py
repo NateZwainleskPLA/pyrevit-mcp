@@ -158,6 +158,18 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         Revit shows its non-modal warning. No failure resolutions are applied.
         Rolled-back errors also appear to the user in a small non-modal box.
 
+        Revit's Duplicate Types dialog (CopyElements into a document that has
+        same-named types, often materials, with different settings) is
+        answered Cancel, so the copy raises "User cancelled the operation."
+        failures records it with dialog_id, action 'cancelled' and the script
+        location (file, line) of the copy, and hints explains the fix: pass
+        DB.CopyPasteOptions with SetDuplicateTypeNamesHandler, whose
+        OnDuplicateTypeNamesFound returns DuplicateTypeAction.UseDestinationTypes
+        or Abort. With a handler set, no dialog appears. Other dialogs are left
+        for the user and recorded as 'left_for_user' once answered.
+        script_location.innermost names the failing file and line when the
+        script exec's another file.
+
         For UI operations that cannot run inside a transaction, such as switching
         the active view (requires allow_ui_change=True):
             all_views = DB.FilteredElementCollector(doc).OfClass(DB.View).ToElements()

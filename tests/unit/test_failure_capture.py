@@ -236,7 +236,7 @@ def test_execute_payload_reports_failures_and_unsubscribes(execution_route, noti
 
 def test_execute_payload_raw_transaction_warning_commits_and_is_reported(execution_route, notices):
     application = SimpleNamespace(FailuresProcessing=Event())
-    uiapp = SimpleNamespace(Application=application)
+    uiapp = SimpleNamespace(Application=application, DialogBoxShowing=Event())
     execution_route.DB = FailureDB(application, [Message("Warning", OVERLAP, [1, 2])])
     code = "t = DB.Transaction(doc, 'Raw')\nt.Start()\ndoc.value = 4\nt.Commit()\nt.Dispose()"
     result, status = execution_route.execute_payload({"code": code}, Document(), None, uiapp=uiapp)
