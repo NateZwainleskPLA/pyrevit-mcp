@@ -170,8 +170,7 @@ def test_truncation_keeps_structured_error_and_partial_output():
     store.take_next()
     receipt = store.complete("one", "failed", "committed", {
         "error_type": "AssertionError", "error": "assert failed", "partial_output": "x" * 5000,
-        "traceback": "trace" * 5000, "script_location": {"filename": "trial.py", "line": 42},
-        "code_attempted": "y" * 10000})
+        "traceback": "trace" * 5000, "script_location": {"filename": "trial.py", "line": 42}})
     result = receipt["result"]
     assert result["receipt_truncated"]
     assert result["error_type"] == "AssertionError"

@@ -82,7 +82,7 @@ def _format_success_value(value, response):
         "effects", "operation_id", "state", "partial_output", "traceback",
     }
     metadata = {key: val for key, val in response.items() if key in metadata_fields}
-    if response.get("failures"):  # kept warnings or raw rollbacks the script outlived
+    if response.get("failures"):  # kept warnings, or a dialog cancel the script caught
         metadata["failures"] = response["failures"]
     text = str(value)
     if metadata:
@@ -140,6 +140,10 @@ def _format_transport(result):
         prefix = "" if result.http_success else "Error: "
         return "{}HTTP {} {}\n{}".format(prefix, result.status_code, phrase, text).strip()
     return text
+
+
+def _empty(value):
+    return value is None or (isinstance(value, (str, list, tuple, dict)) and not value)
 
 
 def format_response(response):
@@ -235,16 +239,18 @@ def format_response(response):
                 error_parts.append(traceback_info)
 
             # Add any additional fields that might be helpful for debugging
-            debug_fields = ["code_attempted", "endpoint", "request_data", "response_code"]
+            debug_fields = ["endpoint", "request_data", "response_code"]
             for field in debug_fields:
                 if field in response:
                     error_parts.append("{}: {}".format(field.replace("_", " ").title(), response[field]))
 
-            # Include full response for debugging if it has unexpected fields
-            response_keys = set(response.keys()) - {"error", "message", "traceback", "details", "status", "code_attempted", "endpoint", "request_data", "response_code"}
-            if response_keys:
+            # The remaining fields, without empty ones or a second copy of output.
+            shown = set(debug_fields) | {"error", "message", "traceback", "details", "status"}
+            extra = [key for key in sorted(response) if key not in shown and not _empty(response[key])
+                     and not (key == "partial_output" and response[key] == response.get("output"))]
+            if extra:
                 error_parts.append("\n=== ADDITIONAL RESPONSE DATA ===")
-                for key in sorted(response_keys):
+                for key in extra:
                     error_parts.append("{}: {}".format(key, response[key]))
 
             return "\n".join(error_parts)

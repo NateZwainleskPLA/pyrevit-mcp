@@ -2,7 +2,28 @@
 """Code execution tools for the MCP server."""
 
 from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
+from .revit_transport import RevitTransportResult
 from .utils import format_response
+
+
+def _failed(response):
+    """A transport failure, a non-2xx status, or a Revit response that reports failure."""
+    result = getattr(response, "transport_result", None)
+    if result is not None:
+        return bool(result.failure_kind) or not result.http_success or result.revit_error
+    if isinstance(response, dict):
+        return RevitTransportResult(method="POST", url="", status_code=200,
+                                    json_received=True, body=response).revit_error
+    return False
+
+
+def _tool_result(response):
+    """The formatted text; a failure raises it as ToolError so the client sees is_error."""
+    text = format_response(response)
+    if _failed(response):
+        raise ToolError(text)
+    return text
 
 
 def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
@@ -49,12 +70,9 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
                            script_name=script_name)
             response = await revit_post("/execute_application_code/", payload, ctx,
                                         target=target, allow_ui_change=allow_ui_change, timeout=60.0)
-            return format_response(response)
         except (ConnectionError, ValueError, RuntimeError) as error:
-            message = "Error during application code execution: {}".format(error)
-            if ctx:
-                await ctx.error(message)
-            return message
+            raise ToolError("Error during application code execution: {}".format(error)) from error
+        return _tool_result(response)
 
     @mcp.tool()
     async def execute_revit_application_script_file(
@@ -75,9 +93,9 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
             payload.update(description=description, transaction_mode=transaction_mode)
             response = await revit_post("/execute_application_code/", payload, ctx,
                                         target=target, allow_ui_change=allow_ui_change, timeout=60.0)
-            return format_response(response)
         except (OSError, ConnectionError, ValueError, RuntimeError) as error:
-            return "Error reading/executing local application script: {}".format(error)
+            raise ToolError("Error reading/executing local application script: {}".format(error)) from error
+        return _tool_result(response)
 
     @mcp.tool()
     async def execute_revit_script_file(
@@ -99,9 +117,9 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
             payload.update(description=description, transaction_mode=transaction_mode)
             response = await revit_post("/execute_code/", payload, ctx, target=target,
                                         document=document, allow_ui_change=allow_ui_change, timeout=60.0)
-            return format_response(response)
         except (OSError, ValueError) as error:
-            return "Error reading/executing local script: {}".format(error)
+            raise ToolError("Error reading/executing local script: {}".format(error)) from error
+        return _tool_result(response)
 
     @mcp.tool()
     async def execute_revit_code(
@@ -152,11 +170,28 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
 
         Revit failures never open a blocking dialog during the call. Each is
         listed in failures: severity, description, element_ids, transaction
-        and action. An error rolls its transaction back (action 'rolled_back'):
-        an owned scope raises with the failure text and a raw Commit() returns
-        RolledBack. Warnings commit and stay in the model (action 'kept') and
-        Revit shows its non-modal warning. No failure resolutions are applied.
+        and action. An error rolls its transaction back (action 'rolled_back')
+        and the call fails: an owned scope raises with the failure text, and a
+        raw Commit() returns RolledBack, after which the call ends with
+        error_type 'RevitFailure' naming the transaction and Revit's text.
+        The script's other commits stay in the model, so check it before
+        rerunning the script. Warnings commit and stay in the model (action
+        'kept') and Revit shows its non-modal warning. No failure resolutions
+        are applied.
         Rolled-back errors also appear to the user in a small non-modal box.
+        A failed call is an MCP tool error; its traceback shows source lines.
+
+        Revit's Duplicate Types dialog (CopyElements into a document that has
+        same-named types, often materials, with different settings) is
+        answered Cancel, so the copy raises "User cancelled the operation."
+        failures records it with dialog_id, action 'cancelled' and the script
+        location (file, line) of the copy, and hints explains the fix: pass
+        DB.CopyPasteOptions with SetDuplicateTypeNamesHandler, whose
+        OnDuplicateTypeNamesFound returns DuplicateTypeAction.UseDestinationTypes
+        or Abort. With a handler set, no dialog appears. Other dialogs are left
+        for the user and recorded as 'left_for_user' once answered.
+        script_location.innermost names the failing file and line when the
+        script exec's another file.
 
         For UI operations that cannot run inside a transaction, such as switching
         the active view (requires allow_ui_change=True):
@@ -192,10 +227,6 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
                 document=document,
                 allow_ui_change=allow_ui_change,
             )
-            return format_response(response)
-
         except (ConnectionError, ValueError, RuntimeError) as e:
-            error_msg = "Error during code execution: {}".format(str(e))
-            if ctx:
-                await ctx.error(error_msg)
-            return error_msg
+            raise ToolError("Error during code execution: {}".format(str(e))) from e
+        return _tool_result(response)

@@ -11,7 +11,10 @@ foundation does not claim the legacy route already meets the targeting contract.
 stdout and stderr in an outer finally, including SystemExit/KeyboardInterrupt.
 Output remains separate from stderr. Failures preserve `partial_output`,
 `error_type`, `traceback`, and `script_location` (filename/line/column). A supplied
-`script_name` contributes only its basename; it never reads a host file. Empty
+`script_name` contributes only its basename; it never reads a host file. The
+submitted source is registered in `linecache` under that basename for the call
+(mtime None, so `checkcache` keeps it), so the traceback prints each failing
+line; a previous entry under the same name is restored afterwards. Empty
 output remains an empty string. Capture read/close failures appear separately
 in `cleanup_errors` and do not mask the script exception. Execution must be
 serialized because Python streams belong to the engine.
@@ -94,7 +97,15 @@ failing element IDs, transaction name and action. Errors roll back with
 clear-after-rollback, and no dialog appears (`rolled_back`). Warnings commit and
 stay in `doc.GetWarnings()`, shown as Revit's non-modal mini-warning (`kept`).
 `DeleteWarning` and failure resolutions are not used. An owned commit that a
-failure rolled back names the failure text in its cleanup error.
+failure rolled back names the failure text in its cleanup error. A raw
+`Commit()` that Revit rolls back returns RolledBack without raising, so when
+the script otherwise succeeds, any `rolled_back` record ends the call as an
+error: `error_type` `RevitFailure`, a message naming each rolled-back
+transaction and the first failure's text, and `effects` as the receipts report
+them. The message says the script's other commits stay in the model, so an
+agent checks it before rerunning the script; nothing rolls the whole call back.
+A script's own error stays the reported one. Kept warnings and dialog
+records do not fail a call.
 
 Revit's mini-warning can only show registered definitions, which have fixed text
 and can be created only at startup. So rolled-back errors are shown to the user
@@ -103,6 +114,33 @@ tool window owned by Revit, opened in the Revit window's lower right with room
 left below for Revit's mini-warning. It stays put if the window moves later.
 Errors collect newest first, with time, transaction, text and element IDs,
 until the user closes it. Showing it never affects the call.
+
+Some modal dialogs aren't failures, so FailuresProcessing never sees them.
+`execute_payload` also subscribes `UIApplication.DialogBoxShowing` for the call
+(`dialog_capture.py`). The operations runtime supplies no uiapp, so it builds a
+`UIApplication` over the document's Application. Only exact dialog IDs proven
+live are answered. Today that is `Dialog_Revit_PasteSimilarSymbolsPaste`,
+Revit's Duplicate Types dialog. `CopyElements` shows it when the destination has
+same-named types with different settings, and without a handler it blocks the
+call. It is answered Cancel (IDCANCEL), so the copy raises
+`OperationCanceledException` ("User cancelled the operation."). OK would quietly
+keep the destination's types, and the script should choose that itself through
+`CopyPasteOptions.SetDuplicateTypeNamesHandler`. With a handler set, Revit raises
+no dialog event at all. This was proven in Revit 2025.5 (25.5.0.57). The ID is
+unverified on 2024 and 2026.
+
+Each dialog is recorded in `failures` with its `dialog_id`, `action`
+(`cancelled`, `answer_rejected` or `left_for_user`) and `location`: the innermost
+script frame (file, line, function, code) when the event fired. IronPython
+exposes the stack there, through `exec`'d files too, because the event fires
+synchronously inside the script's Revit call. A cancelled Duplicate Types dialog
+also adds a hint naming that line. A script that catches the exception still gets
+the record. Unknown dialogs are left for the user, as before.
+
+`script_location` keeps the line in the submitted code. When the error was raised
+deeper in another script file (a submitted script that exec's a file),
+`script_location.innermost` gives that file and line. Connector and standard
+library frames are skipped.
 
 Managed mode opens one owned transaction on the supplied document. Additional
 helper scopes are rejected. Compile/capture failure or cancellation before Start

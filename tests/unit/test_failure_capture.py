@@ -236,7 +236,7 @@ def test_execute_payload_reports_failures_and_unsubscribes(execution_route, noti
 
 def test_execute_payload_raw_transaction_warning_commits_and_is_reported(execution_route, notices):
     application = SimpleNamespace(FailuresProcessing=Event())
-    uiapp = SimpleNamespace(Application=application)
+    uiapp = SimpleNamespace(Application=application, DialogBoxShowing=Event())
     execution_route.DB = FailureDB(application, [Message("Warning", OVERLAP, [1, 2])])
     code = "t = DB.Transaction(doc, 'Raw')\nt.Start()\ndoc.value = 4\nt.Commit()\nt.Dispose()"
     result, status = execution_route.execute_payload({"code": code}, Document(), None, uiapp=uiapp)
@@ -244,6 +244,53 @@ def test_execute_payload_raw_transaction_warning_commits_and_is_reported(executi
     assert [item["action"] for item in result["failures"]] == ["kept"]
     assert application.FailuresProcessing.handlers == []
     assert notices == []  # Revit shows kept warnings itself
+
+
+RAW = "t = DB.Transaction(doc, 'Raw')\nt.Start()\ndoc.value = 4\nprint(t.Commit())\nt.Dispose()"
+
+
+def raw_commit(execution_route, *messages, code=RAW):
+    application = SimpleNamespace(FailuresProcessing=Event())
+    uiapp = SimpleNamespace(Application=application, DialogBoxShowing=Event())
+    execution_route.DB = FailureDB(application, *messages)
+    return execution_route.execute_payload({"code": code}, Document(), None, uiapp=uiapp)
+
+
+def test_raw_commit_rolled_back_by_revit_fails_the_call(execution_route):
+    result, status = raw_commit(execution_route, [Message("Error", CANT_SET, [9])])
+    assert status == 500
+    assert result["status"] == "error" and result["error_type"] == "RevitFailure"
+    assert result["error"] == ("Revit rolled back transaction 'Raw' because of an error: "
+                               + CANT_SET + ". The script kept running, and anything else it "
+                               "committed is still in the model; check the model before running "
+                               "it again. See failures for every message.")
+    assert result["output"] == result["partial_output"] == "RolledBack\n"
+    assert result["effects"] == "unknown"  # raw work: no owned receipt proves the effect
+    assert [item["action"] for item in result["failures"]] == ["rolled_back"]
+
+
+def test_every_rolled_back_transaction_is_named_once(execution_route):
+    code = ("for name in ('A', 'B', 'A'):\n    t = DB.Transaction(doc, name)\n    t.Start()\n"
+            "    t.Commit()\n    t.Dispose()")
+    result, status = raw_commit(execution_route, [Message("Error", CANT_SET)], [Message("Error", "Second")],
+                                [Message("Error", "Third")], code=code)
+    assert status == 500
+    assert result["error"].startswith("Revit rolled back transactions 'A', 'B' because of an error: " + CANT_SET)
+
+
+def test_the_scripts_own_error_stays_the_reported_one(execution_route):
+    code = "t = DB.Transaction(doc, 'Raw')\nt.Start()\nt.Commit()\nt.Dispose()\nraise ValueError('later')"
+    result, status = raw_commit(execution_route, [Message("Error", CANT_SET)], code=code)
+    assert status == 500 and result["error"] == "ValueError: later"
+
+
+def test_a_caught_owned_rollback_still_fails_the_call(execution_route):
+    # The owned scope's cleanup error already fails it; that error stays the reported one.
+    code = ("try:\n    with execution.transaction(doc, 'Set'):\n        doc.value = 5\n"
+            "except Exception:\n    print('caught')")
+    result, status = raw_commit(execution_route, [Message("Error", CANT_SET)], code=code)
+    assert status == 500 and result["error_type"] == "TransactionScopeError"
+    assert CANT_SET in result["cleanup_errors"][0]["error"]
 
 
 def test_success_formatting_shows_failures_only_when_present():

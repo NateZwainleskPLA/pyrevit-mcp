@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from mcp.server.mcpserver import Image
+from mcp.server.mcpserver.exceptions import ToolError
 
 import main
 from tools.code_execution_tools import register_code_execution_tools
@@ -69,7 +70,13 @@ async def test_non_200_receipts_reach_tools_without_invented_crash(status, insta
     body = {"state": "queued", "operation_id": "original", "effects": "none", "target": "actual"}
     requests = install_http(lambda request: httpx.Response(status, json=body))
     register_code_execution_tools(mock_mcp, main.revit_get, main.revit_post)
-    rendered = await mock_mcp.tools["execute_revit_code"](code="print('one')", target="r1", document="d1")
+    tool = mock_mcp.tools["execute_revit_code"]
+    if status < 300:
+        rendered = await tool(code="print('one')", target="r1", document="d1")
+    else:  # a non-2xx status is a failed call, with the same text
+        with pytest.raises(ToolError) as failure:
+            await tool(code="print('one')", target="r1", document="d1")
+        rendered = str(failure.value)
     assert "HTTP {}".format(status) in rendered
     assert json.loads(rendered.split("\n", 1)[1]) == body
     assert "Unknown error occurred" not in rendered

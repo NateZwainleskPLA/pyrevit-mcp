@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from revit_mcp.routing_policy import RoutingPolicyError
 from revit_mcp.identity import IdentityError
@@ -94,7 +95,9 @@ async def test_main_code_and_file_tool_render_handshake_failure(monkeypatch, tmp
     path.write_text("print('not sent')", encoding="utf-8")
     for name, kwargs in [("execute_revit_code", {"code": "print(1)"}),
                          ("execute_revit_script_file", {"file_path": str(path)})]:
-        text = await mock_mcp.tools[name](target="r1", document="d1", **kwargs)
+        with pytest.raises(ToolError) as failure:
+            await mock_mcp.tools[name](target="r1", document="d1", **kwargs)
+        text = str(failure.value)
         assert str(handshake_error) in text and "not sent" in text
     request.assert_not_awaited()
 

@@ -2,6 +2,7 @@
 """Tests for other tool module wrappers — verify endpoints and payloads."""
 import pytest
 from unittest.mock import AsyncMock
+from mcp.server.mcpserver.exceptions import ToolError
 from tools.status_tools import register_status_tools
 from tools.model_tools import register_model_tools
 from tools.view_tools import register_view_tools
@@ -219,7 +220,14 @@ class TestCodeExecutionTools:
 
     async def test_execute_code_connection_error(self):
         self.mock_post.side_effect = ConnectionError("refused")
-        result = await self.tools["execute_revit_code"](
-            code="print(1)", ctx=None
-        , target="r1", document="d1")
-        assert "Error during code execution" in result
+        with pytest.raises(ToolError, match="Error during code execution: refused"):
+            await self.tools["execute_revit_code"](
+                code="print(1)", ctx=None
+            , target="r1", document="d1")
+
+    async def test_execute_code_script_error_is_a_tool_error(self):
+        self.mock_post.return_value = {"status": "error", "error": "NameError: x",
+                                       "traceback": "line 1\n    x\n"}
+        with pytest.raises(ToolError) as failure:
+            await self.tools["execute_revit_code"](code="x", target="r1", document="d1")
+        assert "Error: NameError: x" in str(failure.value) and "    x" in str(failure.value)

@@ -3,6 +3,7 @@ import inspect
 from unittest.mock import AsyncMock
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from revit_mcp.routing_policy import RoutingPolicyError
 from tools.code_execution_tools import register_code_execution_tools
@@ -81,8 +82,10 @@ async def test_application_file_tool_reads_local_utf8_bom_and_sends_basename_onl
     post = AsyncMock(return_value={"status": "error", "partial_output": "雪",
                                   "actual_target": {"runtime_id": "confirmed"}})
     register_code_execution_tools(mock_mcp, AsyncMock(), post)
-    result = await mock_mcp.tools["execute_revit_application_script_file"](
-        target="remote", file_path=str(path))
+    with pytest.raises(ToolError) as failure:
+        await mock_mcp.tools["execute_revit_application_script_file"](
+            target="remote", file_path=str(path))
+    result = str(failure.value)
     assert "confirmed" in result and "雪" in result
     assert post.await_args.args[0] == "/execute_application_code/"
     payload = post.await_args.args[1]
@@ -97,8 +100,8 @@ async def test_application_tools_reject_managed_mode_without_transport(mock_mcp,
     post = AsyncMock()
     register_code_execution_tools(mock_mcp, AsyncMock(), post)
     kwargs = {"code": "pass"} if tool.endswith("_code") else {"file_path": "missing.py"}
-    result = await mock_mcp.tools[tool](target="r1", transaction_mode="managed", **kwargs)
-    assert "script" in result and "Error" in result
+    with pytest.raises(ToolError, match="script"):
+        await mock_mcp.tools[tool](target="r1", transaction_mode="managed", **kwargs)
     post.assert_not_awaited()
 
 
@@ -122,8 +125,8 @@ async def test_application_file_errors_never_send_request(tmp_path, contents, mo
         path.write_bytes(contents)
     post = AsyncMock()
     register_code_execution_tools(mock_mcp, AsyncMock(), post)
-    result = await mock_mcp.tools["execute_revit_application_script_file"](target="r1", file_path=str(path))
-    assert "Error" in result
+    with pytest.raises(ToolError, match="Error reading/executing local application script"):
+        await mock_mcp.tools["execute_revit_application_script_file"](target="r1", file_path=str(path))
     post.assert_not_awaited()
 
 

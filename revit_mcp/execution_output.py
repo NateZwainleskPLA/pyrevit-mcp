@@ -3,6 +3,9 @@
 
 Requires serialized execution in one IronPython engine: sys streams are global.
 """
+import linecache
+import os
+import re
 import sys
 import threading
 import traceback
@@ -21,6 +24,17 @@ except NameError:
 
 
 DEFAULT_OUTPUT_LIMIT_CHARS = 1000000
+_CONNECTOR_DIR = os.path.normcase(os.path.dirname(os.path.abspath(__file__)))
+_STDLIB_DIR = os.path.normcase(os.path.dirname(os.path.abspath(os.__file__)))
+
+
+def script_frame(filename):
+    """False for this package and the standard library, so locations name script code."""
+    try:
+        folder = os.path.normcase(os.path.dirname(os.path.abspath(filename)))
+    except Exception:
+        return False
+    return folder != _CONNECTOR_DIR and not (folder + os.sep).startswith(_STDLIB_DIR + os.sep)
 
 
 def validate_output_limit(limit):
@@ -127,11 +141,19 @@ def exception_details(error, exc_info, filename):
         location["line"] = error.lineno
         location["column"] = error.offset
     else:
-        tb = exc_info[2]
+        # The innermost frame below the script names the real line when the
+        # script exec's a file of its own, e.g. exec(compile(open(p).read(), p, "exec")).
+        tb, entered, innermost = exc_info[2], False, None
         while tb is not None:
-            if tb.tb_frame.f_code.co_filename == filename:
+            frame_file = tb.tb_frame.f_code.co_filename
+            if frame_file == filename:
                 location["line"] = tb.tb_lineno
+                entered = True
+            if entered and script_frame(frame_file):
+                innermost = {"file": safe_text(frame_file), "line": tb.tb_lineno}
             tb = tb.tb_next
+        if innermost is not None and innermost != {"file": filename, "line": location["line"]}:
+            location["innermost"] = innermost
     try:
         trace = u"".join(traceback.format_exception(*exc_info))
     except BaseException:
@@ -139,6 +161,34 @@ def exception_details(error, exc_info, filename):
     return {"error": u"{0}: {1}".format(type(error).__name__, safe_text(error)),
             "error_type": type(error).__name__, "traceback": trace,
             "script_location": location}
+
+
+def _source_lines(source):
+    """Physical lines with their endings, as linecache stores them."""
+    lines, start = [], 0
+    for match in re.finditer(r"\r\n|\r|\n", source):
+        lines.append(source[start:match.end()])
+        start = match.end()
+    if start < len(source):
+        lines.append(source[start:])
+    return lines
+
+
+def _register_source(filename, code):
+    """Let tracebacks print the script's lines. Returns the entry to restore.
+
+    A None mtime keeps linecache.checkcache from evicting the entry, on 2.7 too.
+    """
+    previous = linecache.cache.get(filename)
+    linecache.cache[filename] = (len(code), None, _source_lines(code), filename)
+    return previous
+
+
+def _unregister_source(filename, previous):
+    if previous is None:
+        linecache.cache.pop(filename, None)
+    else:
+        linecache.cache[filename] = previous
 
 
 def execute_script(code, namespace, script_name="<revit-script>", buffer_factory=None,
@@ -155,6 +205,7 @@ def execute_script(code, namespace, script_name="<revit-script>", buffer_factory
     result = {"status": "success", "output": u"", "stderr": u"",
               "script_name": filename}
     cleanup_errors = []
+    previous_source = _register_source(filename, code)
     try:
         stdout = CaptureStream(buffer_factory, budget, "output")
         stderr = CaptureStream(buffer_factory, budget, "stderr")
@@ -171,6 +222,7 @@ def execute_script(code, namespace, script_name="<revit-script>", buffer_factory
         result.update(exception_details(error, sys.exc_info(), filename))
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
+        _unregister_source(filename, previous_source)
         for name, stream in (("output", stdout), ("stderr", stderr)):
             if stream is None:
                 continue

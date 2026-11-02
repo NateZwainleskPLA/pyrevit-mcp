@@ -2,6 +2,7 @@ import hashlib
 from unittest.mock import AsyncMock
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from scripts.execute_revit_file import execute_script_file, read_script_file
 from tools.code_execution_tools import register_code_execution_tools
@@ -51,7 +52,9 @@ async def test_mcp_file_tool_preserves_diagnostics_and_targeted_payload(tmp_path
     post = AsyncMock(return_value={"status": "error", "error": "AssertionError", "script_location": {"filename": "fail.py", "line": 1},
                                   "partial_output": "before", "actual_target": {"instance_id": "actual"}})
     register_code_execution_tools(mock_mcp, AsyncMock(), post)
-    result = await mock_mcp.tools["execute_revit_script_file"](target="r1", document="d1", file_path=str(path))
+    with pytest.raises(ToolError) as failure:
+        await mock_mcp.tools["execute_revit_script_file"](target="r1", document="d1", file_path=str(path))
+    result = str(failure.value)
     assert "fail.py" in result and "before" in result and "actual" in result
     assert post.await_args.kwargs["target"] == "r1"
     assert post.await_args.kwargs["document"] == "d1"

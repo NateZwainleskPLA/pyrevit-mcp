@@ -37,6 +37,51 @@ def test_partial_output_and_script_line(failure):
     assert (sys.stdout, sys.stderr) == streams
 
 
+def test_exec_file_error_names_the_file_line(tmp_path):
+    inner = tmp_path / "build.py"
+    inner.write_text("x = 1\nraise ValueError('deep')\n")
+    code = "p = {0!r}\nexec(compile(open(p).read(), p, 'exec'))".format(str(inner))
+    result = execute_script(code, {}, "runner.py")
+    assert result["script_location"]["line"] == 2
+    assert result["script_location"]["innermost"] == {"file": str(inner), "line": 2}
+    # Both files' lines are printed: the submitted script from linecache, the inner one from disk.
+    assert "line 2, in <module>\n    exec(compile(open(p).read(), p, 'exec'))\n" in result["traceback"]
+    assert "build.py\", line 2, in <module>\n    raise ValueError('deep')\n" in result["traceback"]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_traceback_shows_the_failing_source_lines(newline):
+    import linecache
+    code = newline.join(["def check(value):", "    assert value > 1, 'too small'", "check(0)"])
+    result = execute_script(code, {}, "task.py")
+    trace = result["traceback"]
+    assert 'File "task.py", line 3, in <module>\n    check(0)\n' in trace
+    assert 'File "task.py", line 2, in check\n    assert value > 1, \'too small\'\n' in trace
+    assert "task.py" not in linecache.cache  # registered only for the call
+
+
+def test_source_registration_restores_a_previous_entry():
+    import linecache
+    previous = (1, None, ["kept\n"], "shared.py")
+    linecache.cache["shared.py"] = previous
+    try:
+        result = execute_script("raise KeyError('x')", {}, "shared.py")
+        assert "    raise KeyError('x')\n" in result["traceback"]
+        assert linecache.cache["shared.py"] is previous
+    finally:
+        linecache.cache.pop("shared.py", None)
+
+
+def test_default_script_name_shows_source_lines():
+    result = execute_script("x = 1\nundefined_name", {})
+    assert 'File "<revit-script>", line 2, in <module>\n    undefined_name\n' in result["traceback"]
+
+
+def test_stdlib_error_keeps_the_script_line():
+    result = execute_script("import json\njson.loads('{bad')", {}, "runner.py")
+    assert result["script_location"] == {"filename": "runner.py", "line": 2, "column": None}
+
+
 def test_syntax_error_location():
     result = execute_script("x =", {}, "bad.py")
     assert result["error_type"] == "SyntaxError"
