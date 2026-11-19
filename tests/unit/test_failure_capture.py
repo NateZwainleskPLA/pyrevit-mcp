@@ -202,17 +202,66 @@ def test_owned_commit_rolled_back_by_failure_names_the_failure_text():
                                 {"doc": doc, "execution": context}, "trial.py", runner=context.run)
         context.close()
     result.update(context.summary())
-    assert result["error"] == ("TransactionScopeError: Owned scope did not finish cleanly: Set: "
-                               "Revit failure rolled back the commit: " + CANT_SET)
-    assert result["cleanup_errors"] == [{"scope": "Set", "stage": "commit",
+    assert result["error"] == "TransactionScopeError: Revit rolled back the commit of 'Set': " + CANT_SET + "."
+    assert result["cleanup_errors"] == [{"scope": "Set", "stage": "commit", "rolled_back": True,
                                          "error": "Revit failure rolled back the commit: " + CANT_SET}]
     assert result["owned_effects"] == "rolled_back" and not result["unsafe"] and doc.value == 0
 
 
-def test_rollback_without_reported_failure_keeps_generic_message():
+def test_rollback_without_reported_failure_says_the_reason_is_unknown_and_how_to_find_it():
     result, context, db, doc = run("doc.value = 9", "managed", FakeDB({"commit_status": "RolledBack"}))
     assert result["cleanup_errors"][0]["error"] == "Expected Committed, received RolledBack"
-    assert "Expected Committed, received RolledBack" in result["error"]
+    assert result["error"].startswith("TransactionScopeError: Revit rolled back the commit of "
+                                      "'Managed execution' without reporting a reason. To find the reason, "
+                                      "run that edit alone")
+    assert not result["unsafe"]
+
+
+def test_a_broken_failure_handler_is_named_instead_of_no_reason():
+    application = SimpleNamespace(FailuresProcessing=Event())
+    db, doc = FailureDB(application, [Message("Error", CANT_SET)]), Document()
+
+    class BrokenMessage(Message):
+        def GetFailingElementIds(self):
+            raise RuntimeError("ids unavailable")
+    db.messages = [[BrokenMessage("Error", CANT_SET)]]
+    db.plans = [{"commit_status": "RolledBack"}]  # Revit rolls back itself; the handler did not
+    with FailureCapture(db, application) as capture:
+        context = ExecutionContext(db, doc, "managed", failures=capture.failures)
+        result = execute_script("doc.value = 3", {"doc": doc, "execution": context}, "trial.py",
+                                runner=context.run)
+        context.close()
+    assert result["error"] == ("TransactionScopeError: Revit rolled back the commit of 'Managed execution' "
+                               "without reporting a reason. Revit failure capture did not work in this "
+                               "call: ids unavailable.")
+
+
+def test_caught_repeated_rollbacks_headline_names_scope_reason_and_count(execution_route):
+    # The audit's shape: a loop of flex trials that catches each scope error.
+    code = ("for index in range(12):\n    try:\n"
+            "        with execution.transaction(doc, 'Flex Straight endpoints'):\n"
+            "            doc.value = index\n    except Exception:\n        pass")
+    result, status = raw_commit(execution_route, *([[Message("Error", "Can't create sweep")]] * 12), code=code)
+    assert status == 500 and result["error_type"] == "TransactionScopeError"
+    assert result["error"] == ("TransactionScopeError: Revit rolled back the commits of "
+                               "'Flex Straight endpoints' (12 times): Can't create sweep. The script caught "
+                               "the error and kept running, so anything else it committed is still in the model.")
+    assert result["cleanup_errors"] == [{"scope": "Flex Straight endpoints", "stage": "commit", "count": 12,
+                                         "rolled_back": True,
+                                         "error": "Revit failure rolled back the commit: Can't create sweep"}]
+    assert not result["unsafe"]
+
+
+def test_caught_rollbacks_with_and_without_reason_are_told_apart(execution_route):
+    code = ("for name in ('A', 'B', 'B'):\n    try:\n        with execution.transaction(doc, name):\n"
+            "            pass\n    except Exception:\n        pass")
+    application = SimpleNamespace(FailuresProcessing=Event())
+    uiapp = SimpleNamespace(Application=application, DialogBoxShowing=Event())
+    execution_route.DB = FailureDB(application, [Message("Error", CANT_SET)])
+    execution_route.DB.plans = [{}, {"commit_status": "RolledBack"}, {"commit_status": "RolledBack"}]
+    result, status = execution_route.execute_payload({"code": code}, Document(), None, uiapp=uiapp)
+    assert result["error"].startswith("TransactionScopeError: Revit rolled back the commits of 'A': "
+                                      + CANT_SET + "; 'B' (2 times) without reporting a reason. To find")
 
 
 @pytest.mark.parametrize("mode", ["managed", "script"])

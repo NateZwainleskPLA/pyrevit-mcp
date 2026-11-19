@@ -9,10 +9,13 @@ that handle never selects application scope.
 
 - `execute_revit_application_code(target, code, description='Application code
   execution', transaction_mode='script', script_name='<revit-script>',
-  allow_ui_change=False)`
+  allow_ui_change=False, timeout=60)`
 - `execute_revit_application_script_file(target, file_path,
   description='Application script file execution', transaction_mode='script',
-  allow_ui_change=False)`
+  allow_ui_change=False, timeout=60)`
+- `timeout` is the client's wait for Revit's answer in seconds, 1 to 1800,
+  shared by all four execute tools (see
+  [explicit target routing](explicit-target-routing.md#execute-timeout)).
 - `POST /execute_application_code/`: normal script payload plus explicit
   `instance_id`, `runtime_id`, and boolean `allow_ui_change`. Client tools obtain
   these identities from the required target handle on every call.
@@ -108,8 +111,8 @@ all synchronous mutations. A blocked process rejects the call before native
 access. Startup initialization remains strict, retained private owners exclude
 registration, and disabled startup registers request-only rejection handlers.
 Adding the route to the shared policy also adds it to the private lane's required
-legacy-exclusion receipt. Reload never clears safety and no recovery/reset path
-is added.
+legacy-exclusion receipt. Reload never clears safety; only the user override
+dialog does (see execution-foundations.md, "User override").
 
 If a script reloads pyRevit, its addressed registry can expire before the final
 identity refresh. Otherwise successful execution returns HTTP 409 with

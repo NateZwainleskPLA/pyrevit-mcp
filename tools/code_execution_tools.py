@@ -6,6 +6,40 @@ from mcp.server.mcpserver.exceptions import ToolError
 from .revit_transport import RevitTransportResult
 from .utils import format_response
 
+# How long an execute tool waits for Revit's answer, in seconds. The pyRevit
+# Routes bridge and the execute routes impose no limit of their own: Revit runs
+# the script to completion whatever the client does, so this only bounds the
+# wait. The ceiling keeps a typo (or milliseconds) from hanging a call for days.
+DEFAULT_EXECUTE_TIMEOUT = 60.0
+MIN_EXECUTE_TIMEOUT = 1.0
+MAX_EXECUTE_TIMEOUT = 1800.0
+
+TIMEOUT_HINT = (
+    "\nHint: Revit does not stop the script when the client stops waiting. Before "
+    "resubmitting a script that changes the model, check whether this one finished. "
+    "The execute tools wait {default:g} s unless given timeout, in seconds, "
+    "up to {max:g}; pass a larger one for long scripts."
+).format(default=DEFAULT_EXECUTE_TIMEOUT, max=MAX_EXECUTE_TIMEOUT)
+
+
+def execute_timeout(timeout):
+    """The validated client wait in seconds; ValueError names the accepted range."""
+    if timeout is None:
+        return DEFAULT_EXECUTE_TIMEOUT
+    if isinstance(timeout, bool):
+        raise ValueError("timeout must be a number of seconds, not a boolean")
+    try:
+        seconds = float(timeout)
+    except (TypeError, ValueError):
+        raise ValueError("timeout must be a number of seconds, got {!r}".format(timeout)) from None
+    if not MIN_EXECUTE_TIMEOUT <= seconds <= MAX_EXECUTE_TIMEOUT:  # also rejects NaN
+        message = "timeout is in seconds and must be between {:g} and {:g}, got {:g}".format(
+            MIN_EXECUTE_TIMEOUT, MAX_EXECUTE_TIMEOUT, seconds)
+        if MIN_EXECUTE_TIMEOUT <= seconds / 1000.0 <= MAX_EXECUTE_TIMEOUT:
+            message += " (that looks like milliseconds; pass {:g})".format(seconds / 1000.0)
+        raise ValueError(message)
+    return seconds
+
 
 def _failed(response):
     """A transport failure, a non-2xx status, or a Revit response that reports failure."""
@@ -22,6 +56,9 @@ def _tool_result(response):
     """The formatted text; a failure raises it as ToolError so the client sees is_error."""
     text = format_response(response)
     if _failed(response):
+        result = getattr(response, "transport_result", None)
+        if result is not None and result.failure_kind == "timeout":
+            text += TIMEOUT_HINT
         raise ToolError(text)
     return text
 
@@ -35,9 +72,15 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
     async def execute_revit_application_code(
         target: str, code: str, description: str = "Application code execution",
         transaction_mode: str = "script", script_name: str = "<revit-script>",
-        allow_ui_change: bool = False, ctx: Context = None,
+        allow_ui_change: bool = False, timeout: float = DEFAULT_EXECUTE_TIMEOUT,
+        ctx: Context = None,
     ) -> str:
         """Execute synchronous IronPython in the explicit target instance, including at Home.
+
+        timeout is how long to wait for Revit, in seconds: default 60, 1 to
+        1800. Raise it for scripts that open, save or upgrade documents, load
+        or rebuild families, or otherwise take minutes (for example 300).
+        It only bounds the wait: a timed-out script keeps running in Revit.
 
         No document handle is accepted. Initial doc/uidoc and revit.doc/uidoc
         are None even if another document is active; they do not rebind after
@@ -58,18 +101,20 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         still open; refresh target documents for client handles.
 
         Only owned scopes are cleaned. Raw/external effects may remain unknown;
-        unsafe postconditions block all subsequent mutations in this process.
+        unsafe postconditions block all subsequent mutations in this process
+        until the user allows them again (see request_safety_override).
         This is arbitrary IronPython 2.7 execution, not a security sandbox.
         """
         try:
             if transaction_mode != "script":
                 raise ValueError("Application execution requires transaction_mode='script'; select a document for managed mode")
+            seconds = execute_timeout(timeout)
             if ctx:
                 await ctx.info("Executing application code: {}".format(description))
             payload = dict(code=code, description=description, transaction_mode=transaction_mode,
                            script_name=script_name)
             response = await revit_post("/execute_application_code/", payload, ctx,
-                                        target=target, allow_ui_change=allow_ui_change, timeout=60.0)
+                                        target=target, allow_ui_change=allow_ui_change, timeout=seconds)
         except (ConnectionError, ValueError, RuntimeError) as error:
             raise ToolError("Error during application code execution: {}".format(error)) from error
         return _tool_result(response)
@@ -77,22 +122,29 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
     @mcp.tool()
     async def execute_revit_application_script_file(
         target: str, file_path: str, description: str = "Application script file execution",
-        transaction_mode: str = "script", allow_ui_change: bool = False, ctx: Context = None,
+        transaction_mode: str = "script", allow_ui_change: bool = False,
+        timeout: float = DEFAULT_EXECUTE_TIMEOUT, ctx: Context = None,
     ) -> str:
         """Read a LOCAL UTF-8/BOM file and execute in the explicit instance, without a document.
 
         Application binding, UI permission, transactions and safety rules match
         execute_revit_application_code. Only basename, content hash and code are
         transmitted; no server file access or automatic retry occurs.
+
+        timeout is how long to wait for Revit, in seconds: default 60, 1 to
+        1800. Raise it for scripts that open, save or upgrade documents, load
+        or rebuild families, or otherwise take minutes (for example 300).
+        It only bounds the wait: a timed-out script keeps running in Revit.
         """
         from scripts.execute_revit_file import read_script_file
         try:
             if transaction_mode != "script":
                 raise ValueError("Application execution requires transaction_mode='script'; select a document for managed mode")
+            seconds = execute_timeout(timeout)
             payload = read_script_file(file_path)
             payload.update(description=description, transaction_mode=transaction_mode)
             response = await revit_post("/execute_application_code/", payload, ctx,
-                                        target=target, allow_ui_change=allow_ui_change, timeout=60.0)
+                                        target=target, allow_ui_change=allow_ui_change, timeout=seconds)
         except (OSError, ConnectionError, ValueError, RuntimeError) as error:
             raise ToolError("Error reading/executing local application script: {}".format(error)) from error
         return _tool_result(response)
@@ -101,22 +153,29 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
     async def execute_revit_script_file(
         target: str, document: str, file_path: str,
         description: str = "Script file execution", transaction_mode: str = "script",
-        allow_ui_change: bool = False, ctx: Context = None,
+        allow_ui_change: bool = False, timeout: float = DEFAULT_EXECUTE_TIMEOUT,
+        ctx: Context = None,
     ) -> str:
         """Read a local UTF-8/BOM script and execute its contents in the specified document.
 
         The file is read on the MCP client machine, including for remote Revit.
         Only the basename, content hash and code are transmitted. No server-side
         file access or retry occurs. UI/transaction rules match execute_revit_code.
+
+        timeout is how long to wait for Revit, in seconds: default 60, 1 to
+        1800. Raise it for scripts that open, save or upgrade documents, load
+        or rebuild families, or otherwise take minutes (for example 300).
+        It only bounds the wait: a timed-out script keeps running in Revit.
         """
         from scripts.execute_revit_file import read_script_file
         try:
             if transaction_mode not in ("script", "managed"):
                 raise ValueError("transaction_mode must be script or managed")
+            seconds = execute_timeout(timeout)
             payload = read_script_file(file_path)
             payload.update(description=description, transaction_mode=transaction_mode)
             response = await revit_post("/execute_code/", payload, ctx, target=target,
-                                        document=document, allow_ui_change=allow_ui_change, timeout=60.0)
+                                        document=document, allow_ui_change=allow_ui_change, timeout=seconds)
         except (OSError, ValueError) as error:
             raise ToolError("Error reading/executing local script: {}".format(error)) from error
         return _tool_result(response)
@@ -131,9 +190,15 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         transaction_mode: str = "script",
         script_name: str = "<revit-script>",
         allow_ui_change: bool = False,
+        timeout: float = DEFAULT_EXECUTE_TIMEOUT,
     ) -> str:
         """
         Execute IronPython code directly in Revit context.
+
+        timeout is how long to wait for Revit, in seconds: default 60, 1 to
+        1800. Raise it for scripts that open, save or upgrade documents, load
+        or rebuild families, or otherwise take minutes (for example 300).
+        It only bounds the wait: a timed-out script keeps running in Revit.
 
         The code has access to:
         - doc: The explicitly targeted Revit document
@@ -167,6 +232,8 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         processing and cleanup errors are reported as unverified. script_name is
         a diagnostic basename, never a server-side file path. Use IronPython 2.7
         syntax; no f-strings. Imports of json shadow the local adapter: use to_json.
+        IronPython's own json.dumps raises UnicodeDecodeError on non-ASCII text
+        such as the degree sign; to_json and the injected json do not.
 
         Revit failures never open a blocking dialog during the call. Each is
         listed in failures: severity, description, element_ids, transaction
@@ -209,6 +276,7 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
         try:
             if transaction_mode not in ("script", "managed"):
                 raise ValueError("transaction_mode must be 'script' or 'managed'")
+            seconds = execute_timeout(timeout)
             payload = {"code": code, "description": description}
             if transaction_mode != "script":
                 payload["transaction_mode"] = transaction_mode
@@ -222,7 +290,7 @@ def register_code_execution_tools(mcp, revit_get, revit_post, revit_image=None):
                 "/execute_code/",
                 payload,
                 ctx,
-                timeout=60.0,
+                timeout=seconds,
                 target=target,
                 document=document,
                 allow_ui_change=allow_ui_change,

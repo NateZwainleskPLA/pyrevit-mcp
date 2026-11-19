@@ -147,6 +147,8 @@ def test_same_unsafe_guard_blocks_every_mutation_route(host, endpoint):
     response = mutate(app, SimpleNamespace(method="POST", data=data))
     assert response.status == 409
     assert response.data["error_code"] == "mutation_blocked"
+    assert response.data["error"].startswith("Model changes are blocked because an earlier call left Revit")
+    assert "request_safety_override" in response.data["error"]
     handler.assert_not_called()
 
 

@@ -7,7 +7,7 @@ from .identity import IdentityError, string_types
 from .routing_policy import (APPLICATION_ROUTES, MUTATION_ROUTES, RoutingPolicyError, check_ui_policy, route_policy,
                              strip_callback)
 from .target_registry import get_registry, same_document
-from .execution_safety import ExecutionSafety, MutationBlockedError
+from .execution_safety import ExecutionSafety, MutationBlockedError, blocked_message
 
 SAFETY_SLOT = "revit_mcp.routing.safety.v1"
 PRIVATE_OWNER_SLOT = "revit_mcp.execution.owner.v1"
@@ -163,8 +163,11 @@ class TargetedAPI(object):
                     doc, uidoc, actual = validate_api_context(registry, endpoint, payload, uiapp)
                     if endpoint in MUTATION_ROUTES and self.safety is not None:
                         try:
-                            if self.safety.snapshot()["blocked"]:
-                                raise MutationBlockedError("Mutations are blocked by the retained safety guard")
+                            snapshot = self.safety.snapshot()
+                            if snapshot["blocked"]:
+                                # This module's text over primitive fields, even for a
+                                # guard retained from a prior engine.
+                                raise MutationBlockedError(blocked_message(snapshot))
                             self.safety.require_safe()
                         except Exception as error:
                             # A process-retained guard can belong to a previous

@@ -73,6 +73,8 @@ another document also quarantines the exclusive host. The shared
 `get_process_safety()` is retained by routing in CLR AppDomain; the private
 owner uses a separate retained slot for the same guard and single runtime
 lease. Unsafe state is never reset by a successful result or connector reload.
+The user override (execution-foundations.md) clears the shared guard only
+while no private lane owns the process; it never clears a lane's quarantine.
 Cross-engine retention is still a native acceptance gate.
 
 Reload must not re-enable synchronous handlers while a retained private lease

@@ -25,6 +25,9 @@ ROUTES = {
     "/close_document/": (True, False, True),
     "/save_document/": (True, False, False),
     "/sync_with_central/": (True, False, False),
+    # Asks the user in a Revit dialog; deliberately NOT a mutation route, so a
+    # latched guard cannot block the one way to clear it.
+    "/safety/override/": (False, False, False),
     "/operations/submit/": (True, False, False),
     "/operations/inspect/": (False, False, False),
     "/operations/cancel/": (False, False, False),

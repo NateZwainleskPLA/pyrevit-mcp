@@ -28,6 +28,8 @@ def register_tools(mcp_server, revit_get_func, revit_post_func, revit_image_func
     register_launch_tools(mcp_server, revit_get_func, discovery=target_discovery)
     register_document_tools(mcp_server, revit_get_func, revit_post_func)
     register_family_backport_tools(mcp_server, revit_post_func)
+    from .safety_tools import register_safety_tools
+    register_safety_tools(mcp_server, revit_post_func)
     if target_directory is not None and target_discovery is not None:
         from .target_tools import register_target_tools
         register_target_tools(mcp_server, target_directory, target_discovery)

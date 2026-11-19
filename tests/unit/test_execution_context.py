@@ -145,6 +145,30 @@ def test_leaked_scopes_unwind_in_reverse_order_and_fail():
     assert doc.value == 0 and not result["unsafe"]
 
 
+def test_leaked_scope_headline_names_the_scopes():
+    code = "g = execution.rollback_scope(doc, 'group')\ng.__enter__()\nt = execution.transaction(doc, 'edit')\nt.__enter__()"
+    result, context, db, doc = run(code)
+    assert result["error"] == ("TransactionScopeError: The script left owned scopes 'group', 'edit' open; "
+                               "the connector rolled them back.")
+
+
+def test_unsafe_cleanup_headline_names_scope_stage_and_the_block():
+    code = "t = execution.transaction(doc, 'edit')\nt.__enter__()"
+    result, context, db, doc = run(code, db=FakeDB({"rollback_error": True}))
+    assert result["unsafe"]
+    assert result["error"] == ("TransactionScopeError: Unsafe cleanup of 'edit' (rollback): rollback failure; "
+                               "1 more in cleanup_errors. "
+                               "The connector will block model changes until Revit is restarted. "
+                               "Owned scope 'edit' could not be closed and is retained for recovery.")
+
+
+def test_collapse_errors_counts_identical_entries_in_order():
+    from revit_mcp.execution_context import collapse_errors
+    a, b = {"stage": "commit", "error": "x", "scope": "A"}, {"stage": "commit", "error": "y", "scope": "A"}
+    assert collapse_errors([a, b, dict(a), dict(a)]) == [dict(a, count=3), b]
+    assert "count" not in a
+
+
 def test_cleanup_error_preserves_primary_and_retains_only_owned_scopes():
     db = FakeDB({}, {"rollback_error": True})
     code = "with execution.rollback_scope(doc, 'group'):\n    with execution.transaction(doc, 'edit'):\n        doc.value = 9\n        assert False"

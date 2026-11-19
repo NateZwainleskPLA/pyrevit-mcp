@@ -70,6 +70,10 @@ def register_routes(legacy_api_enabled=True):
 
             register_family_backport_routes(targeted_api)
 
+            from revit_mcp.safety_override import register_safety_override_routes
+
+            register_safety_override_routes(targeted_api)
+
             logger.info("All MCP routes registered successfully")
             if not legacy_api_enabled:
                 from revit_mcp.routing_policy import ROUTES

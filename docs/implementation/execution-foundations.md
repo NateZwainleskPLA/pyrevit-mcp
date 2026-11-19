@@ -152,6 +152,17 @@ rollback. Pending/unknown scopes are not disposed and remain strongly referenced
 by `retained_contexts()` for explicit recovery. Cleanup errors preserve the primary
 script exception, leave effects unverified, and set unsafe when necessary.
 
+A scope's own error and the end-of-run `TransactionScopeError` (raised when the
+script swallowed a scope error or left a scope open) open with one headline from
+`describe_cleanup`. It reports, in order: unsafe cleanup with its scope and
+stage (and that the connector now blocks model changes), scopes the script left
+open that were rolled back or could not be closed, and commits Revit rolled
+back, per scope with a count and Revit's text. A rollback with no recorded
+reason says so, and says how to find it. A broken failure handler or missing
+subscription is named instead. Cleanup entries for a commit that Revit rolled
+back carry `rolled_back: true`. `summary()` collapses identical entries into one
+entry with `count`.
+
 `owned_effects` describes only tracked scopes. Group rollback updates contained
 scope effects. A surviving earlier owned commit remains committed after a later
 exception. Script-mode `effects` remains unknown if there is no surviving owned
@@ -166,7 +177,56 @@ Safety integration
 `ExecutionSafety` in `execution_safety.py` is an optional guard primitive:
 `observe(result, document_id=None, operation_id=None)` latches `unsafe`,
 `require_safe()` rejects mutations with MutationBlockedError, and `snapshot()`
-copies diagnostics. Success never resets it. Share one process-retained instance
+copies diagnostics. A successful result or a connector reload never clears it,
+and nothing clears it automatically. The rejection text comes from
+`blocked_message(snapshot)` over primitive snapshot fields, so a guard retained
+from a prior engine gets it too. It names the first latch reason (error type,
+stage, scope, error, operation/document IDs), the recovery step and the
+read-only tools that still run. Code execution routes stay blocked even for
+read-only scripts: arbitrary IronPython cannot be proven read-only.
+
+User override
+-------------
+
+The human at the Revit window can lift the block; an agent cannot. The 409
+names `request_safety_override` and tells the agent to tell the user that a
+dialog is waiting in Revit. That tool posts `/safety/override/`, which is
+registered through `TargetedAPI` (identity is validated, so an expired runtime
+stays `stale_target`) but is not a mutation route, so the guard cannot block
+it. In API context `safety_override.request_override`:
+
+- Returns `not_blocked` without a dialog when nothing is latched.
+- Refuses with 409, no dialog, when the retained guard has no `clear_by_user`
+  (an older connector version), when a private execution lane owns the process
+  (its own quarantine is not cleared), or while an execute call's
+  `DialogCapture` is subscribed (`dialog_capture.active_captures()`).
+- Re-checks every open document (valid, not `IsModifiable`) and every scope in
+  `retained_contexts()` (status must be terminal), then shows a TaskDialog
+  (`Id` `RevitMCP_SafetyOverride`) with the latch reason and the check result.
+  Only the "Allow model changes again" command link (CommandLink2) allows;
+  the default link, Escape and the close box keep changes blocked.
+- If the check fails, the dialog says so in its main instruction and only
+  offers Close: the override is refused, because a transaction is
+  demonstrably still open. The user saves their work and restarts Revit.
+- After "Allow" it re-checks once more and calls
+  `ExecutionSafety.clear_by_user`, the only caller of that method. Cleared
+  reasons move to `snapshot()["cleared"]` with `cleared_at`, `cleared_by`
+  (`user_override_dialog`) and the check rows; the next unsafe observation
+  latches again.
+- One dialog at a time: a request while it is open returns
+  `dialog_already_open`, and for 60 seconds after a "keep blocked" or refused
+  answer with the same latch reasons, a repeat returns that answer without a
+  new dialog.
+
+The dialog is modal, so the HTTP call can outlive the client's wait (300
+seconds). On timeout the tool says the dialog is still open, to ask the user to
+answer it and then retry the blocked call. No connector dialog hook answers it:
+`DialogCapture` is armed only inside `execute_payload`, answers exact IDs only,
+and `dialog_policy.py` is not installed by startup. The check cannot see open
+transaction groups, file writes or changes already committed; the dialog says
+so. A restart remains the fallback.
+
+Share one process-retained instance
 across synchronous routing and queued execution, including runtime reloads.
 Caller identity validation precedes guard checks, and guards run at admission
 and again in API context immediately before mutation. Routing must guard every

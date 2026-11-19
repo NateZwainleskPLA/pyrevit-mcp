@@ -1,7 +1,59 @@
 # -*- coding: UTF-8 -*-
 """Reusable IronPython/Revit helpers, independent of Routes registration."""
 import json
+import re
+from collections import OrderedDict
 from .execution_output import text_type
+
+_BINARY_TYPES = tuple(t for t in (bytes, bytearray) if t is not text_type)
+# Windows ANSI code page where it exists, then cp1252; latin-1 never fails.
+_BINARY_ENCODINGS = ("utf-8", "mbcs", "cp1252")
+_NON_ASCII = re.compile(r"[^\x00-\x7f]")
+
+
+def _decode_binary(value):
+    for encoding in _BINARY_ENCODINGS:
+        try:
+            return value.decode(encoding)
+        except (UnicodeError, LookupError):
+            continue
+    return value.decode("latin-1")
+
+
+def _escape_char(match):
+    code = ord(match.group(0))
+    if code > 0xFFFF:  # CPython 3; IronPython strings already hold surrogates.
+        code -= 0x10000
+        return u"\\u{0:04x}\\u{1:04x}".format(0xD800 | (code >> 10), 0xDC00 | (code & 0x3FF))
+    return u"\\u{0:04x}".format(code)
+
+
+def _text_strings(value, active=None):
+    """value with byte strings decoded to text, in keys and values at any depth.
+
+    Containers without byte strings are returned unchanged. A container
+    already being walked is left for json's own circular-reference check.
+    """
+    if isinstance(value, _BINARY_TYPES):
+        return _decode_binary(value)
+    if not isinstance(value, (dict, list, tuple)):
+        return value
+    active = set() if active is None else active
+    if id(value) in active:
+        return value
+    active.add(id(value))
+    try:
+        if isinstance(value, dict):
+            pairs = [(_text_strings(k, active), _text_strings(v, active))
+                     for k, v in value.items()]
+            changed = any(new[0] is not k or new[1] is not v
+                          for new, (k, v) in zip(pairs, value.items()))
+            return OrderedDict(pairs) if changed else value
+        items = [_text_strings(item, active) for item in value]
+        changed = any(new is not old for new, old in zip(items, value))
+        return items if changed else value
+    finally:
+        active.discard(id(value))
 
 
 class RevitHelpers(object):
@@ -60,8 +112,20 @@ class RevitHelpers(object):
         raise TypeError("{0} is not JSON serializable".format(type(value).__name__))
 
     def to_json(self, value, **kwargs):
-        kwargs.setdefault("default", self.json_default)
-        return json.dumps(value, **kwargs)
+        """json.dumps that accepts non-ASCII text and byte strings anywhere in value.
+
+        IronPython 2.7's json treats every str as UTF-8 bytes when ensure_ascii
+        is on, so text such as u"90°" (from AsValueString) raises
+        UnicodeDecodeError. Encode with ensure_ascii off, which never decodes,
+        and escape non-ASCII afterwards: the result is what CPython's json
+        returns. Byte strings are decoded as UTF-8, then the Windows code page,
+        then latin-1, so no data is dropped.
+        """
+        default = kwargs.pop("default", None) or self.json_default
+        ensure_ascii = kwargs.pop("ensure_ascii", True)
+        kwargs["default"] = lambda obj: _text_strings(default(obj))
+        text = json.dumps(_text_strings(value), ensure_ascii=False, **kwargs)
+        return _NON_ASCII.sub(_escape_char, text) if ensure_ascii else text
 
     def namespace(self):
         return {"System": self.system, "json": self.json, "eid": self.eid,
@@ -77,8 +141,7 @@ class JsonAdapter(object):
         return self.helpers.to_json(value, **kwargs)
 
     def dump(self, value, fp, **kwargs):
-        kwargs.setdefault("default", self.helpers.json_default)
-        return json.dump(value, fp, **kwargs)
+        fp.write(self.helpers.to_json(value, **kwargs))
 
     def loads(self, value, **kwargs):
         return json.loads(value, **kwargs)

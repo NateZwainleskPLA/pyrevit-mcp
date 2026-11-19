@@ -32,6 +32,14 @@ DUPLICATE_TYPES_HINT = (
     "returns DB.DuplicateTypeAction.UseDestinationTypes to keep the destination's types, "
     "or Abort to cancel. args.GetTypeIds() lists the conflicting types in args.Document.")
 MAX_MESSAGE_CHARS = 500
+# Subscribed captures, so the safety override dialog is never shown while one
+# could answer it. Execute calls are the only owner of DialogBoxShowing here.
+_subscribed = [0]
+
+
+def active_captures():
+    """How many execute-call dialog captures are subscribed right now."""
+    return _subscribed[0]
 
 
 def _delegate(callback):
@@ -85,6 +93,7 @@ class DialogCapture(object):
             return self
         self._handler = handler
         self.active = True
+        _subscribed[0] += 1
         return self
 
     def __exit__(self, error_type, error, tb):
@@ -96,6 +105,7 @@ class DialogCapture(object):
             except BaseException as unsubscribe_error:
                 logger.warning("DialogBoxShowing unsubscribe failed: %s", safe_text(unsubscribe_error))
             self._handler = None
+            _subscribed[0] -= 1
         return False
 
     def _on_dialog(self, sender, args):

@@ -40,7 +40,8 @@ def startup_host(monkeypatch):
                      ("views", "register_views_routes"), ("placement", "register_placement_routes"),
                      ("colors", "register_color_routes"), ("code_execution", "register_code_execution_routes"),
                      ("document", "register_document_routes"),
-                     ("family_backport", "register_family_backport_routes"))
+                     ("family_backport", "register_family_backport_routes"),
+                     ("safety_override", "register_safety_override_routes"))
     for index, (module_name, function_name) in enumerate(registrations):
         def register(route_api, paths=paths[index::len(registrations)]):
             events.append("routes")

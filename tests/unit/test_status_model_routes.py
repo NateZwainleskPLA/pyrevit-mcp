@@ -157,6 +157,7 @@ def test_targeted_startup_omits_legacy_raw_liveness(registered_routes, monkeypat
         "colors": "register_color_routes", "code_execution": "register_code_execution_routes",
         "document": "register_document_routes",
         "family_backport": "register_family_backport_routes",
+        "safety_override": "register_safety_override_routes",
     }.items():
         module = ModuleType("revit_mcp." + name)
         setattr(module, registrar, lambda api: None)

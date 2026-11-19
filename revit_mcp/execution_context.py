@@ -29,6 +29,125 @@ def retained_contexts():
     return tuple(_retained_contexts)
 
 
+ROLLED_BACK_PREFIX = "Revit failure rolled back the commit: "
+CAPTURE_FAILED = "; failure capture failed: "
+NO_REASON_HELP = (u"To find the reason, run that edit alone, without try/except, and read failures; "
+                  u"a failures preprocessor set on the transaction keeps Revit's message from the connector.")
+MAX_HEADLINE_ERROR_CHARS = 200
+
+
+def collapse_errors(errors):
+    """Identical cleanup errors once each, first-seen order, with count when repeated."""
+    collapsed, seen = [], {}
+    for item in errors:
+        key = repr(sorted(item.items())) if isinstance(item, dict) else repr(item)
+        if key in seen:
+            entry = seen[key]
+            entry["count"] = entry.get("count", 1) + 1
+            continue
+        entry = dict(item) if isinstance(item, dict) else item
+        seen[key] = entry
+        collapsed.append(entry)
+    return collapsed
+
+
+def _quoted(names):
+    return u", ".join(u"'{0}'".format(safe_text(name)) for name in names)
+
+
+def _times(count):
+    return u" ({0} times)".format(count) if count > 1 else u""
+
+
+def _clip(text):
+    text = safe_text(text)
+    return text if len(text) <= MAX_HEADLINE_ERROR_CHARS else text[:MAX_HEADLINE_ERROR_CHARS - 3] + u"..."
+
+
+def _rollback_reason(entry):
+    """(Revit's reason or None, capture error or None) for a rolled-back commit entry."""
+    error = safe_text(entry.get("error", ""))
+    if error.startswith(ROLLED_BACK_PREFIX):
+        return error[len(ROLLED_BACK_PREFIX):], None
+    if CAPTURE_FAILED in error:
+        return None, error.split(CAPTURE_FAILED, 1)[1]
+    return None, None
+
+
+def describe_cleanup(errors, leaked=(), unresolved=(), unsafe=False, failures=()):
+    """One short headline for owned-scope cleanup: what Revit or the script actually did.
+
+    Order: unsafe cleanup, then scopes the script left open, then commits that
+    Revit rolled back. Identical errors are counted, not repeated.
+    """
+    errors = collapse_errors(errors)
+    rollbacks = [item for item in errors if item.get("rolled_back")]
+    others = [item for item in errors if not item.get("rolled_back")]
+    parts = []
+    if others:
+        first = others[0]
+        if first.get("scope"):
+            where = u"of '{0}' ({1})".format(safe_text(first["scope"]), first.get("stage"))
+        else:
+            where = u"({0})".format(first.get("stage"))
+        text = u"{0} {1}: {2}{3}".format(u"Unsafe cleanup" if unsafe else u"Cleanup failed", where,
+                                        _clip(first.get("error", "")).rstrip(u"."),
+                                        _times(first.get("count", 1)))
+        more = sum(item.get("count", 1) for item in others[1:])
+        text += u"; {0} more in cleanup_errors.".format(more) if more else u"."
+        if unsafe:
+            text += u" The connector will block model changes until Revit is restarted."
+        parts.append(text)
+    closed = [name for name in leaked if name not in unresolved]
+    if closed:
+        noun = u"scope" if len(closed) == 1 else u"scopes"
+        parts.append(u"The script left owned {0} {1} open; the connector rolled {2} back.".format(
+            noun, _quoted(closed), u"it" if len(closed) == 1 else u"them"))
+    if unresolved:
+        parts.append(u"Owned scope {0} could not be closed and is retained for recovery.".format(
+            _quoted(unresolved)))
+    if rollbacks:
+        # Per scope: how many commits Revit rolled back and the distinct reasons.
+        scopes = []
+        for item in rollbacks:
+            name = safe_text(item.get("scope"))
+            entry = next((scope for scope in scopes if scope[0] == name), None)
+            if entry is None:
+                entry = [name, 0, [], []]
+                scopes.append(entry)
+            entry[1] += item.get("count", 1)
+            reason, capture_error = _rollback_reason(item)
+            if reason and reason not in entry[2]:
+                entry[2].append(reason)
+            if capture_error and capture_error not in entry[3]:
+                entry[3].append(capture_error)
+        segments, unknown, capture_errors = [], False, []
+        for name, count, reasons, scope_capture_errors in scopes:
+            if reasons:
+                shown = u" / ".join(_clip(reason) for reason in reasons[:2])
+                if len(reasons) > 2:
+                    shown += u" / {0} more".format(len(reasons) - 2)
+                segments.append(u"'{0}'{1}: {2}".format(name, _times(count), shown.rstrip(u".")))
+            else:
+                unknown = True
+                capture_errors.extend(scope_capture_errors)
+                segments.append(u"'{0}'{1} without reporting a reason".format(name, _times(count)))
+        noun = u"commit" if len(rollbacks) == 1 and rollbacks[0].get("count", 1) == 1 else u"commits"
+        text = u"Revit rolled back the {0} of {1}.".format(noun, u"; ".join(segments))
+        if unknown:
+            unavailable = [item.get("error") for item in failures
+                           if item.get("action") == "capture_unavailable"]
+            if capture_errors or unavailable:
+                text += u" Revit failure capture did not work in this call: {0}.".format(
+                    _clip((capture_errors + unavailable)[0]).rstrip(u"."))
+            else:
+                text += u" " + NO_REASON_HELP
+        parts.append(text)
+    if not parts:
+        parts.append(u"Execution ended with unsafe cleanup; see cleanup_errors.")
+    return u" ".join(parts)
+
+
 def _same_document(first, second):
     """Compare native document wrappers without trusting Python identity alone."""
     if first is second:
@@ -66,8 +185,11 @@ class OwnedScope(object):
         self.context._unwind_children(self)
         self.context._finish(self, rollback=error_type is not None or self.kind == "rollback")
         if error_type is None and len(self.context.cleanup_errors) > before:
-            details = "; ".join(item["error"] for item in self.context.cleanup_errors[before:])
-            raise TransactionScopeError("Owned scope did not finish cleanly: {0}: {1}".format(self.name, details))
+            unresolved = [scope.name for scope in self.context.active
+                          if scope is self or self.context._descends_from(scope, self)]
+            raise TransactionScopeError(describe_cleanup(
+                self.context.cleanup_errors[before:], unresolved=unresolved,
+                unsafe=self.context.unsafe, failures=self.context.failures))
         return False
 
 
@@ -158,8 +280,12 @@ class ExecutionContext(object):
         scope.receipt["status"] = safe_text(status)
         return status
 
-    def _error(self, scope, stage, error, unsafe=True):
-        self.cleanup_errors.append({"scope": scope.name, "stage": stage, "error": safe_text(error)})
+    def _error(self, scope, stage, error, unsafe=True, rolled_back=False):
+        entry = {"scope": scope.name, "stage": stage, "error": safe_text(error)}
+        if rolled_back:
+            # Revit finished the commit RolledBack: a failed edit, not unsafe state.
+            entry["rolled_back"] = True
+        self.cleanup_errors.append(entry)
         self.unsafe = self.unsafe or unsafe
 
     def _descends_from(self, child, parent):
@@ -201,12 +327,21 @@ class ExecutionContext(object):
                     # A failed Commit can finish RolledBack; record it, but the
                     # requested edit still failed. Started is unwound by close.
                     message = "Expected {0}, received {1}".format(expected, status)
-                    cause = "; ".join(item["description"] for item in self.failures[reported:]
+                    reported_now = self.failures[reported:]
+                    cause = "; ".join(safe_text(item.get("description", "")) for item in reported_now
                                       if item.get("action") == "rolled_back")
+                    revit_rolled_back = not rollback and status == ts.RolledBack
                     if cause and not rollback:
-                        message = "Revit failure rolled back the commit: " + cause
+                        message = ROLLED_BACK_PREFIX + cause
+                    elif revit_rolled_back:
+                        # The handler failed, so Revit's message was not recorded.
+                        broken = [safe_text(item.get("error", "")) for item in reported_now
+                                  if item.get("action") == "capture_error"]
+                        if broken:
+                            message += CAPTURE_FAILED + broken[0]
                     self._error(scope, "rollback" if rollback else "commit", message,
-                                unsafe=status not in (ts.Committed, ts.RolledBack))
+                                unsafe=status not in (ts.Committed, ts.RolledBack),
+                                rolled_back=revit_rolled_back)
             if status == ts.Committed:
                 scope.receipt["effect"] = "committed"
             elif status == ts.RolledBack:
@@ -245,10 +380,16 @@ class ExecutionContext(object):
                 self.checkpoint()
             failed = False
         finally:
-            leaked = bool(self.active)
+            leaked = [scope.name for scope in self.active]
             self.close()
             if not failed and (leaked or self.cleanup_errors or self.unsafe):
-                raise TransactionScopeError("Execution ended with leaked scopes or unsafe cleanup")
+                message = describe_cleanup(self.cleanup_errors, leaked,
+                                           [scope.name for scope in self.active], self.unsafe, self.failures)
+                if any(item.get("rolled_back") for item in self.cleanup_errors):
+                    # Its scope raised, so the script caught that error and went on.
+                    message += (u" The script caught the error and kept running, so anything else "
+                                u"it committed is still in the model.")
+                raise TransactionScopeError(message)
 
     def close(self):
         """Unwind owned scopes in reverse order; never recover raw transactions."""
@@ -304,5 +445,5 @@ class ExecutionContext(object):
             overall = "unknown"
         return {"effects": overall, "owned_effects": owned, "unsafe": self.unsafe,
                 "transaction_receipts": [dict(scope.receipt) for scope in self.scopes],
-                "checks": list(self.checks), "cleanup_errors": list(self.cleanup_errors),
+                "checks": list(self.checks), "cleanup_errors": collapse_errors(self.cleanup_errors),
                 "document_notes": [dict(note) for note in self.document_notes]}

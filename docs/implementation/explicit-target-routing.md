@@ -73,7 +73,8 @@ verified completion.
 CLR AppDomain. All synchronous mutation paths share it. Identity validation
 precedes its guard. Mutations reject an already modifiable selected document;
 observed unsafe cleanup/postconditions latch the guard, and later success cannot
-clear it. Queries remain available. This neither scans raw transactions nor
+clear it; only the user override dialog does (`/safety/override/`, see
+execution-foundations.md). Queries remain available. This neither scans raw transactions nor
 repairs another command's scopes. Untracked other-document/file effects remain
 outside this guarantee. Operations must inject the very same retained guard.
 The guard's primitive snapshot selects a local `mutation_blocked` rejection,
@@ -169,3 +170,23 @@ It requires an explicit target, accepts no document selector, starts with
 [application execution contract](application-scoped-execution.md) for bound
 Application/UIApplication access, opening and continuing, registry descriptors,
 document-state checks, shared process safety and native proof requirements.
+
+Execute timeout
+---------------
+
+`execute_revit_code`, `execute_revit_script_file`,
+`execute_revit_application_code` and `execute_revit_application_script_file`
+take an optional `timeout` in seconds: default 60, accepted range 1 to 1800.
+Values outside the range fail before anything is sent; a value that would be in
+range divided by 1000 (for example `600000`) is reported as probable
+milliseconds. Numeric strings such as `"240"` are coerced by the MCP argument
+model. Raise the timeout for scripts that open, save or upgrade documents, load
+or rebuild families, or otherwise run for minutes.
+
+The timeout bounds only the client's wait. Neither the pyRevit Routes bridge nor
+the execute routes have a limit of their own: the Routes handler thread waits
+for the Revit API callback without a deadline, and Revit runs the script to
+completion even after the client gives up. A timed-out result therefore keeps
+the "may still be running in Revit" warning, and adds a hint to check the model
+before resubmitting and to pass a larger timeout next time. The MCP host can
+still impose its own per-tool-call limit, which this server cannot raise.
